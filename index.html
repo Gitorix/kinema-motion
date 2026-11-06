@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-nvnsON3gPyBveZFLAO+F+UuMAsKDRr0Zt9zvWi3+UQs=' 'sha256-F4JI+LEEX/KLuJVgXscbbHukLILMLfQ+YvqXS8YzHSU=' 'sha256-Dr46HCh9D35FwCuRhwaBJr1yEeAmJajzNgBO2O94aME=' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/ https://cdn.jsdelivr.net/npm/three@0.160.0/; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/ https://cdn.jsdelivr.net/npm/three@0.160.0/ https://storage.googleapis.com/mediapipe-models/; img-src 'self' data: blob:; media-src blob:; worker-src blob:; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KINEMA 動作解析</title>
+<meta name="description" content="スマホで撮った動画から動きを解析し、鍛えるべき筋肉と意識するポイントを3Dで示すツール">
+<script>
+  // Show any error on the page itself, so a screenshot is enough to tell what went wrong. The page keeps working.
+  function showPageError(text) {
+    const box = document.getElementById('pageError'), msg = document.getElementById('pageErrorText');
+    if (!box || !msg) return;
+    box.hidden = false;
+    msg.textContent = text;
+  }
+  window.addEventListener('error', e => {
+    if (/^ResizeObserver loop/.test(e.message)) return; // a harmless browser notice, not an error
+    showPageError(`${e.message}（${(e.filename || '').split('/').pop().split('?')[0]} ${e.lineno || ''}行目）`);
+  });
+  window.addEventListener('unhandledrejection', e => showPageError(String(e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+  document.addEventListener('securitypolicyviolation', e => showPageError(`安全のための設定で読み込みを止めました：${e.effectiveDirective} ${e.blockedURI}`));
+  document.addEventListener('click', e => { if (e.target.id === 'pageErrorClose') document.getElementById('pageError').hidden = true; });
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<style>
+  /* Layout: coaching desk — upload and body readings on the left, 3D body in the centre, advice on the right, timeline below */
+  :root {
+    --bg: #eef1f3;
+    --panel: #ffffff;
+    --sunk: #e6eaee;
+    --ink: #142233;
+    --muted: #5f6c79;
+    --line: #d5dce2;
+    --accent: #0f7f86;
+    --on-accent: #ffffff;
+    --left: #10a39b;
+    --right: #7357d6;
+    --ok: #188a4f;
+    --warn: #b7791f;
+    --bad: #d33f3f;
+    --info: #2f6fd6;
+    --stage-a: #fbfcfc;
+    --stage-b: #dde4e8;
+    /* trajectory colours, one per body point */
+    --tr-com: #e8590c; --tr-sh: #1c7ed6; --tr-hip: #ae3ec9; --tr-kn: #2f9e44; --tr-ft: #d6336c; --tr-wr: #0c8599;
+    --font-display: "Zen Maru Gothic", "Zen Kaku Gothic New", "Hiragino Sans", sans-serif;
+    --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f151a; --panel: #161e25; --sunk: #0b1014; --ink: #e6edf2; --muted: #8d9aa6; --line: #26313b;
+      --accent: #3cc0c4; --on-accent: #06272a; --left: #2fc7bd; --right: #9b85f0;
+      --ok: #45c482; --warn: #e3ad4b; --bad: #ff6b6b; --info: #6ea0ff; --stage-a: #1a232b; --stage-b: #0c1116;
+      --tr-com: #ff922b; --tr-sh: #4dabf7; --tr-hip: #da77f2; --tr-kn: #69db7c; --tr-ft: #f783ac; --tr-wr: #3bc9db;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f151a; --panel: #161e25; --sunk: #0b1014; --ink: #e6edf2; --muted: #8d9aa6; --line: #26313b;
+    --accent: #3cc0c4; --on-accent: #06272a; --left: #2fc7bd; --right: #9b85f0;
+    --ok: #45c482; --warn: #e3ad4b; --bad: #ff6b6b; --info: #6ea0ff; --stage-a: #1a232b; --stage-b: #0c1116;
+    --tr-com: #ff922b; --tr-sh: #4dabf7; --tr-hip: #da77f2; --tr-kn: #69db7c; --tr-ft: #f783ac; --tr-wr: #3bc9db;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 13.5px/1.6 var(--font-body);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 12px calc(var(--player-h, 64px) + 20px);
+  }
+  .app { max-width: 1520px; margin: 0 auto; display: grid; gap: 12px; }
+  .btn {
+    appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    font: 500 13px/1 var(--font-body); padding: 9px 14px; border-radius: 8px; cursor: pointer;
+  }
+  .btn.small { padding: 6px 10px; font-size: 12px; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  :is(.btn, .tog, .moves button, .legend button, .log button, .mchip, .drop, #chart, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .check-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+
+  /* header */
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { width: 30px; height: 30px; flex: none; }
+  .brand b { display: block; font: 700 20px/1 var(--font-display); letter-spacing: 0.04em; }
+  .brand small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 24px; flex: 1 1 380px; min-width: 0; }
+  .meta div { display: grid; gap: 1px; min-width: 0; }
+  .meta label { font-size: 11px; color: var(--muted); }
+  .meta span { font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 26ch; }
+  .pill { display: inline-block; padding: 1px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; background: var(--sunk); color: var(--muted); }
+  .pill.busy { background: var(--accent); color: var(--on-accent); }
+  .pill.ok { background: var(--ok); color: #fff; }
+  .pill.bad { background: var(--bad); color: #fff; }
+
+  /* grid */
+  .main { display: grid; grid-template-columns: 270px minmax(0, 1fr) 330px; gap: 12px; align-items: start; }
+  .rail { display: grid; gap: 12px; min-width: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; min-width: 0; }
+  .panel h2 { margin: 0 0 10px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font: 700 14.5px/1.3 var(--font-display); }
+  .panel h2 span { font: 400 11.5px/1 var(--font-body); color: var(--muted); }
+  .note { margin: 10px 0 0; font-size: 11.5px; color: var(--muted); }
+
+  /* upload */
+  .moves { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }
+  .moves button {
+    appearance: none; padding: 8px 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); font: 500 12.5px/1.2 var(--font-body); cursor: pointer;
+  }
+  .moves button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .drop {
+    position: relative; display: grid; gap: 4px; place-items: center; text-align: center; padding: 18px 10px;
+    border: 2px dashed var(--line); border-radius: 10px; background: var(--sunk); cursor: pointer;
+  }
+  .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .drop b { font: 700 15px/1.3 var(--font-display); color: var(--accent); }
+  .drop span { font-size: 11.5px; color: var(--muted); }
+  .drop.over { border-color: var(--accent); }
+  .safe { margin: 8px 0 6px; font-size: 11.5px; color: var(--muted); }
+  details.howto { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+  details.howto summary { cursor: pointer; font-weight: 500; font-size: 12.5px; }
+  details.howto ul { margin: 6px 0 2px; padding-left: 18px; font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+
+  /* readings */
+  .arows { display: grid; gap: 5px; }
+  .arow { display: grid; grid-template-columns: 20px 3.6em minmax(0, 1fr) 3.2em; align-items: center; gap: 7px; }
+  .arow.gap { margin-top: 5px; }
+  .arow.low { opacity: 0.4; }
+  .arow .side { font-size: 10.5px; font-weight: 700; text-align: center; padding: 2px 0; border-radius: 4px; color: #fff; }
+  .arow.l .side { background: var(--left); }
+  .arow.r .side { background: var(--right); }
+  .arow .jname { font-size: 12.5px; white-space: nowrap; }
+  .track { position: relative; height: 8px; background: var(--sunk); border-radius: 4px; }
+  .track .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; }
+  .arow.l .fill { background: var(--left); }
+  .arow.r .fill { background: var(--right); }
+  .track .rom { position: absolute; top: -3px; bottom: -3px; border: 1px solid var(--ink); border-radius: 4px; opacity: 0.3; }
+  .val { font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+  .srows { display: grid; gap: 6px; }
+  .srow { display: grid; grid-template-columns: minmax(0, 1fr) 3.4em 6.4em; align-items: center; gap: 8px; font-size: 12.5px; }
+  .chip { justify-self: end; padding: 1px 8px; border-radius: 99px; font-size: 11.5px; white-space: nowrap; background: var(--sunk); color: var(--muted); }
+  .chip.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .chip.warn { background: color-mix(in srgb, var(--warn) 17%, transparent); color: var(--warn); }
+  .chip.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+
+  /* stage: the 3D view, with its switches in a strip below it so that nothing covers the body or the floor */
+  .stage-box {
+    display: flex; flex-direction: column; min-width: 0; min-height: 460px; height: min(calc(100vh - var(--player-h, 64px) - 96px), 880px);
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel);
+  }
+  .stage {
+    position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden;
+    background: radial-gradient(120% 90% at 50% 25%, var(--stage-a), var(--stage-b));
+  }
+  #view3d { position: absolute; inset: 0; }
+  #view3d canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #callouts, #muscleTags { position: absolute; inset: 0; pointer-events: none; }
+  #calloutLines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  #calloutLines polyline { fill: none; stroke: var(--muted); stroke-width: 1; }
+  #calloutLines circle { fill: var(--muted); }
+  .callout { position: absolute; left: 0; top: 0; padding: 2px 8px 3px; background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); border-radius: 8px; white-space: nowrap; font-size: 10.5px; color: var(--muted); }
+  .callout b { display: block; font-size: 14px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .callout.l b { color: var(--left); }
+  .callout.r b { color: var(--right); }
+  .mtag { position: absolute; left: 0; top: 0; padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 700; color: #fff; background: var(--bad); white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+  .mtag.tight { background: var(--warn); }
+  .mtag.select { background: var(--info); }
+  .pip { position: absolute; left: 12px; top: 12px; overflow: hidden; border-radius: 8px; background: #0d1318; box-shadow: 0 0 0 1px var(--line), 0 6px 18px rgba(0, 0, 0, 0.16); }
+  .pip video, .pip canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .pip-tag { position: absolute; left: 6px; bottom: 6px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.55); }
+  .hint { position: absolute; right: 12px; top: 12px; max-width: min(300px, 46%); padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); font-size: 12px; }
+  .hint b { color: var(--accent); }
+  .stage-read { position: absolute; left: 12px; right: 12px; bottom: 10px; display: grid; gap: 6px; pointer-events: none; }
+  .stage-foot { flex: none; padding: 8px 10px; border-top: 1px solid var(--line); }
+  .stage-foot .toolbar { gap: 5px; }
+  .stage-foot .tog { padding: 6px 9px; font-size: 12px; }
+  .phase { display: grid; gap: 0; padding-left: 2px; }
+  .phase strong { display: flex; align-items: center; gap: 8px; font: 700 clamp(17px, 1.8vw, 22px)/1.2 var(--font-display); }
+  .phase strong i { width: 11px; height: 11px; border-radius: 50%; background: currentColor; flex: none; }
+  .phase small { font-size: 12.5px; color: var(--muted); padding-left: 19px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: auto; }
+  .tog { appearance: none; display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px/1 var(--font-body); padding: 7px 11px; border-radius: 99px; cursor: pointer; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--muted); }
+  .tog[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+  .tog.feature { border: 2px solid var(--accent); color: var(--accent); font-weight: 700; }
+  .tog.feature[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .progress { position: absolute; right: 12px; top: 12px; z-index: 2; width: max(240px, min(360px, calc(100% - 270px))); padding: 9px 12px 11px; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 95%, transparent); font-size: 12.5px; }
+  .progress .bar-track { height: 4px; margin-top: 7px; border-radius: 2px; background: var(--sunk); overflow: hidden; }
+  .progress .bar-track i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
+  .progress.error { border-color: var(--bad); color: var(--bad); }
+  .progress.error .bar-track { display: none; }
+  .progress .btn { margin-top: 8px; }
+
+  /* the player: always within reach, wherever the page is scrolled to */
+  .player {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px;
+    padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    background: color-mix(in srgb, var(--panel) 97%, transparent); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+  }
+  .p-main { display: flex; align-items: center; gap: 6px; flex: 1 1 560px; min-width: 0; }
+  .p-main .btn { padding: 7px 10px; flex: none; }
+  .p-main .btn.primary { min-width: 5.6em; padding: 8px 12px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .p-time { flex: none; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .p-main select { flex: none; font: 500 12.5px/1 var(--font-body); padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  #seekBar { flex: 1 1 auto; min-width: 60px; width: 100%; height: 24px; margin: 0; appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer; }
+  #seekBar:disabled { opacity: 0.45; cursor: not-allowed; }
+  #seekBar::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--line) var(--a, 0%), var(--accent) var(--a, 0%), var(--accent) var(--b, 100%), var(--line) var(--b, 100%)); }
+  #seekBar::-moz-range-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--line) var(--a, 0%), var(--accent) var(--a, 0%), var(--accent) var(--b, 100%), var(--line) var(--b, 100%)); }
+  #seekBar::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; background: var(--ink); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); }
+  #seekBar::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--ink); border: 2px solid var(--panel); }
+  #seekBar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .p-range { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .p-range .p-label { font-size: 11.5px; color: var(--muted); }
+  .p-range .p-label b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .p-rep { display: flex; align-items: center; gap: 4px; }
+  .p-rep b { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.4em; text-align: center; }
+  .p-nav { display: flex; flex-wrap: wrap; gap: 2px; }
+  .p-nav button { appearance: none; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: 700 12px/1 var(--font-body); cursor: pointer; white-space: nowrap; }
+  .p-nav button:hover { background: var(--sunk); }
+  .p-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .p-main .btn[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+  /* what is shown over the video and the 3D view, item by item */
+  .disp { position: absolute; right: 12px; bottom: 10px; z-index: 4; width: min(336px, calc(100% - 24px)); max-height: calc(100% - 20px); overflow: auto; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16); font-size: 12px; }
+  .disp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .disp-head b { font: 700 14px/1.3 var(--font-display); }
+  .disp-head button { appearance: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+  .disp-presets { display: flex; flex-wrap: wrap; gap: 5px; }
+  .disp h4 { margin: 10px 0 5px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+  .opts, .disp-pts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .opt { appearance: none; padding: 4px 9px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 12px/1.3 var(--font-body); cursor: pointer; }
+  .opt[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--panel); }
+  .opt:focus-visible, .disp-head button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .disp .tpt { padding: 4px 9px; font-size: 12px; }
+  .disp .tog { padding: 4px 9px; font-size: 12px; }
+  .toast { position: fixed; left: 50%; bottom: calc(var(--player-h, 64px) + 12px); transform: translateX(-50%); z-index: 31; max-width: min(560px, 92vw); padding: 8px 14px; border-radius: 10px; background: var(--ink); color: var(--panel); font-size: 12.5px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22); }
+  .page-error { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 40; width: min(620px, 92vw); padding: 9px 34px 10px 12px; border: 1px solid var(--bad); border-radius: 10px; background: var(--panel); font-size: 12.5px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); }
+  .page-error b { color: var(--bad); }
+  .page-error code { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+  .page-error button { position: absolute; right: 6px; top: 5px; appearance: none; border: 0; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; padding: 4px 6px; cursor: pointer; }
+
+  /* the video on screen and the videos analysed so far */
+  .session { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .session-now { margin: 0 0 8px; display: grid; gap: 1px; }
+  .session-now span { font-size: 11px; color: var(--muted); }
+  .session-now b { font-weight: 700; overflow-wrap: anywhere; }
+  .session-now small { font-size: 11.5px; color: var(--muted); }
+  .session-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .session-list { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .session-list h3 { margin: 0 0 6px; font: 700 12.5px/1.3 var(--font-display); }
+  .session-list h3 span { font: 400 11px/1 var(--font-body); color: var(--muted); }
+  .session-list ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .session-list button { appearance: none; width: 100%; display: grid; gap: 1px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .session-list button:hover { background: var(--sunk); }
+  .session-list button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .session-list button.now { border-color: var(--accent); }
+  .session-list b { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-list span { font-size: 11px; color: var(--muted); }
+
+  /* advice */
+  #advice .empty { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .adv-meta { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+  .adv-auto { margin: 0 0 8px; padding: 6px 9px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 12px; }
+  .adv-sum { display: flex; gap: 6px; margin-bottom: 10px; }
+  .adv-sum .chip { justify-self: start; font-weight: 700; }
+  .adv-note { margin: 10px 0 0; font-size: 11px; color: var(--muted); }
+  .adv-warn { margin: 0 0 8px; padding: 6px 9px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 14%, transparent); font-size: 12px; }
+  .adv-err { margin: 0 0 8px; font-weight: 500; }
+  .adv-try { margin: 0 0 6px; font-size: 12.5px; }
+  .adv-tryb { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .adv-tips { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+  .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .check { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .check.bad { border-left-color: var(--bad); }
+  .check.warn { border-left-color: var(--warn); }
+  .check.ok { border-left-color: var(--ok); }
+  .check.info { border-left-color: var(--info); }
+  .check-head { appearance: none; width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: baseline; padding: 8px 10px; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
+  .check-head:hover { background: var(--sunk); }
+  .check-head .st { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; color: #fff; background: var(--muted); }
+  .check.bad .st { background: var(--bad); }
+  .check.warn .st { background: var(--warn); }
+  .check.ok .st { background: var(--ok); }
+  .check.info .st { background: var(--info); }
+  .check-head b { font-weight: 700; }
+  .check-head .cv { grid-column: 2; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .check-body { padding: 0 10px 10px; font-size: 12.5px; }
+  .check-body p { margin: 0 0 6px; }
+  .check-body .target { color: var(--muted); font-size: 12px; }
+  .check-body h4 { margin: 10px 0 4px; font: 700 12px/1.3 var(--font-display); }
+  .check-body ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+  .check-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .mchips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .mchip { appearance: none; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: 500 12px/1.3 var(--font-body); cursor: pointer; }
+  .mchip.weak { border-color: color-mix(in srgb, var(--bad) 50%, transparent); color: var(--bad); }
+  .mchip.tight { border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); }
+  .mchip.active { background: var(--info); border-color: var(--info); color: #fff; }
+
+  /* muscle info / list */
+  #muscleInfo h2 { font-size: 16px; }
+  .m-region { margin: -4px 0 8px; font-size: 12px; color: var(--muted); }
+  #muscleInfo dl { margin: 0 0 10px; display: grid; grid-template-columns: 6.6em minmax(0, 1fr); gap: 5px 10px; font-size: 12.5px; }
+  #muscleInfo dt { color: var(--muted); }
+  #muscleInfo dd { margin: 0; }
+  #muscleSearch { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; margin-bottom: 8px; }
+  #muscleList, #atlasList { display: grid; gap: 8px; max-height: 320px; overflow: auto; }
+  .listtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  .listtabs button { appearance: none; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 12px/1.3 var(--font-body); cursor: pointer; }
+  .listtabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 700; }
+  .credit { position: absolute; right: 12px; top: 10px; margin: 0; max-width: 46%; text-align: right; font-size: 10.5px; color: var(--muted); }
+  .atlas-note { position: absolute; right: 12px; top: 32px; margin: 0; max-width: min(320px, 50%); padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); font-size: 12px; }
+  .mregion h4 { margin: 0 0 4px; font-size: 11.5px; font-weight: 500; color: var(--muted); }
+  .reps { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+  .reps b { font: 700 38px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+  .reps span { color: var(--muted); font-size: 12px; }
+  #spark { display: block; width: 100%; height: 56px; margin-bottom: 6px; }
+  .kv { display: grid; grid-template-columns: minmax(0, 1fr) auto 2.6em; align-items: baseline; gap: 6px; font-size: 12.5px; padding: 1px 0; }
+  .kv b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .kv small { color: var(--muted); font-size: 10.5px; }
+  .kv i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
+
+  /* picking muscles: name under the pointer, the chosen ones as removable chips */
+  .hover-tip { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; display: grid; gap: 1px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16); font-size: 12px; white-space: nowrap; }
+  .hover-tip b { font-weight: 700; }
+  .hover-tip span { font-size: 11px; color: var(--muted); }
+  .selbar { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .selchip { display: inline-flex; align-items: stretch; border: 1px solid var(--info); border-radius: 99px; overflow: hidden; }
+  .selchip button { appearance: none; border: 0; background: transparent; color: var(--info); font: 500 12px/1.3 var(--font-body); padding: 3px 4px 3px 10px; cursor: pointer; }
+  .selchip .selx { padding: 3px 9px 3px 5px; color: var(--muted); font-size: 13px; }
+  .selchip.on { background: var(--info); }
+  .selchip.on button { color: #fff; }
+  .selact { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 4px; }
+  .selact .note { margin: 0; }
+  #muscleInfo h3.m-name { margin: 12px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); font: 700 15px/1.3 var(--font-display); }
+  #muscleInfo h3.m-name span { font: 400 11.5px/1 var(--font-body); color: var(--muted); }
+  .hint { padding-right: 28px; }
+  .hint-close { position: absolute; right: 4px; top: 3px; appearance: none; border: 0; background: transparent; color: var(--muted); font-size: 17px; line-height: 1; padding: 4px 6px; cursor: pointer; }
+  .tool-sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--line); }
+  .pip { cursor: zoom-in; }
+  .pip.big { cursor: zoom-out; }
+  #trailTags { position: absolute; inset: 0; pointer-events: none; }
+  .evtag { position: absolute; left: 0; top: 0; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 90%, transparent); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+  .height-in { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; }
+  .height-in input { width: 5.5em; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
+  .note.tight { margin-top: 4px; }
+  .body-in { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  #markTags { position: absolute; inset: 0; pointer-events: none; }
+  .marktag { position: absolute; left: 0; top: 0; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); font-size: 11px; line-height: 1.35; white-space: pre; }
+  .kin .empty { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .marktag.now { border-color: var(--tr-com); font-weight: 700; }
+  .marktag.grf { border-color: var(--warn); color: var(--warn); font-weight: 700; }
+  .marktag.guide { color: var(--muted); }
+  .stage-notes { display: flex; flex-wrap: wrap; gap: 4px 8px; pointer-events: none; }
+  .stage-notes p { margin: 0; padding: 3px 9px; border-radius: 8px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); font-size: 11px; color: var(--muted); }
+  .stage-notes b { color: var(--ink); margin-right: 2px; }
+  .stage-notes i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 3px 0 6px; vertical-align: -1px; }
+  .stage-notes i.push { background: #ff4d1a; }
+  .stage-notes i.brake { background: #2f6fff; }
+  .stage-notes i.grf { background: var(--warn); }
+  .stage-notes i.vel { background: var(--ink); }
+
+  /* muscle output panel */
+  .kin { display: grid; gap: 10px; }
+  .kin-phases { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kin-phases button { appearance: none; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 12.5px/1 var(--font-body); cursor: pointer; }
+  .kin-phases button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--panel); font-weight: 700; }
+  .kin-h { margin: 0 0 8px; font: 700 13.5px/1.3 var(--font-display); }
+  .kin-say { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--sunk); font-size: 13px; line-height: 1.65; }
+  .kin-say b { font-size: 15px; }
+  .kin-sub { margin: 12px 0 6px; font-size: 12.5px; font-weight: 700; }
+  .kin-sub span { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+  .kshare { display: flex; height: 24px; border-radius: 7px; overflow: hidden; background: var(--sunk); }
+  .kshare i { display: flex; align-items: center; justify-content: center; min-width: 0; color: #fff; font: 700 12px/1 var(--font-body); font-style: normal; font-variant-numeric: tabular-nums; }
+  .kkey { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; font-size: 11.5px; }
+  .kkey span { display: inline-flex; align-items: center; gap: 5px; }
+  .kkey i { width: 10px; height: 10px; border-radius: 3px; }
+  .jrow { display: grid; grid-template-columns: 11.5em minmax(0, 1fr) 7.5em; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
+  .jrow .jbar { position: relative; height: 12px; border-radius: 6px; background: var(--sunk); overflow: hidden; }
+  .jrow .jbar i { position: absolute; inset: 0 auto 0 0; border-radius: 6px; }
+  .jrow .jbar em { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); }
+  .jrow .jval { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11.5px; }
+  .jrow .jval b { color: var(--ink); font-size: 12.5px; }
+  #kinChart { display: block; width: 100%; height: 220px; margin-top: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--stage-a); cursor: pointer; touch-action: none; }
+  .mrole { margin-bottom: 10px; }
+  .mrole h4 { margin: 0 0 5px; font-size: 12px; font-weight: 700; }
+  .mrole h4 span { font-weight: 400; color: var(--muted); }
+  .mrow { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+  .mrow button { appearance: none; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: 500 12px/1.3 var(--font-body); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mrow button.active { background: var(--info); border-color: var(--info); color: #fff; }
+  .mrow .mbar { height: 8px; border-radius: 4px; background: var(--sunk); overflow: hidden; }
+  .mrow .mbar i { display: block; height: 100%; border-radius: 4px; background: #ff4d1a; }
+  .mrow .mbar i.brake { background: #2f6fff; }
+  .mrow .mbar i.hold { background: var(--muted); }
+  .mrow .mval b { color: var(--ink); font-size: 12px; }
+  #kinMuscles > .note { margin: 0 0 10px; }
+  .mrow .mval { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .mrow.nonum .mval { white-space: normal; grid-column: 2 / 4; }
+
+  /* the figures of one repetition, above the trajectory plot */
+  .tstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; }
+  .tstat { display: grid; gap: 1px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .tstat span { font-size: 11.5px; color: var(--muted); }
+  .tstat b { font: 700 19px/1.25 var(--font-display); font-variant-numeric: tabular-nums; }
+  .tstat small { font-size: 11px; color: var(--muted); }
+  .kin-say:empty { display: none; }
+  #trajSay { margin: 0; }
+  /* what to work on: the plan at the top of the advice */
+  .plan { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .plan h3 { margin: 0 0 8px; font: 700 14.5px/1.3 var(--font-display); }
+  .plan h3 span { font: 400 11.5px var(--font-body); color: var(--muted); }
+  .plan-points { margin: 0 0 10px; padding: 9px 11px 9px 26px; border-radius: 9px; background: var(--sunk); font-size: 12.5px; line-height: 1.6; }
+  .plan-points li + li { margin-top: 4px; }
+  .plan-tier { margin-top: 10px; padding: 2px 0 2px 11px; border-left: 3px solid var(--c, var(--line)); }
+  .plan-tier.stabilizer { --c: var(--muted); }
+  .plan-tier.synergist { --c: var(--info); }
+  .plan-tier.prime { --c: #ff4d1a; }
+  .plan-tier h4 { margin: 0 0 3px; font-size: 13px; font-weight: 700; }
+  .plan-tier h4 em { margin-right: 6px; font-style: normal; color: var(--c); }
+  .plan-tier h5 { margin: 8px 0 2px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+  .plan-tier ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.55; }
+  .plan-why { margin: 0 0 6px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+  .plan-drills { margin: 0; font-size: 12.5px; line-height: 1.55; }
+  .plan-note { margin: 10px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+  .adv-h { margin: 0 0 8px; font: 700 13.5px/1.3 var(--font-display); }
+
+  /* trajectory panel */
+  .traj { display: grid; gap: 10px; }
+  .traj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  .traj-head h2 { margin: 0; }
+  .traj-head .note { margin: 0; }
+  .traj-pts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tpt { appearance: none; display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 500 12.5px/1 var(--font-body); cursor: pointer; }
+  .tpt i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); opacity: 0.3; }
+  .tpt[aria-pressed="true"] { color: var(--ink); border-color: var(--c); font-weight: 700; }
+  .tpt[aria-pressed="true"] i { opacity: 1; }
+  .tpt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .traj-body { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  #trajPlot { display: block; width: 100%; height: 320px; border: 1px solid var(--line); border-radius: 10px; background: var(--stage-a); cursor: pointer; touch-action: none; }
+  .traj-read { margin: 8px 0 0; font-size: 12.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .traj-hints h3 { margin: 0 0 8px; font: 700 13.5px/1.3 var(--font-display); }
+  .traj-hints .empty { margin: 0; color: var(--muted); font-size: 12.5px; }
+  @media (max-width: 900px) { .traj-body { grid-template-columns: minmax(0, 1fr); } }
+
+  /* timeline */
+  .timeline { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; }
+  .tl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 8px; }
+  .tl-head h2, .log-wrap h2 { margin: 0; font: 700 14.5px/1.3 var(--font-display); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .legend button { appearance: none; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: 500 12px/1 var(--font-body); padding: 5px 9px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--muted); }
+  .legend button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+  .legend svg { width: 22px; height: 6px; }
+  .legend svg line { stroke: var(--ink); stroke-width: 2; }
+  #chart { display: block; width: 100%; height: 170px; cursor: pointer; touch-action: none; }
+  .log-wrap { min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
+  .log { list-style: none; margin: 0; padding: 0; overflow: auto; max-height: 196px; border-top: 1px solid var(--line); }
+  .log button { appearance: none; width: 100%; display: grid; grid-template-columns: 5.4em 1.2em minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 5px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: 400 12.5px/1.3 var(--font-body); text-align: left; cursor: pointer; }
+  .log button:hover { background: var(--sunk); }
+  .log li.now button { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .log time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* one screen: the analysis on the left; the 3D view, the angles, the paths and the output side by side */
+  body { padding-top: 6px; }
+  .app { gap: 8px; max-width: none; }
+  .bar { padding: 5px 12px; gap: 6px 22px; }
+  .setup { position: relative; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .setup .moves { display: inline-flex; margin: 0; gap: 4px; }
+  .setup .moves button { padding: 6px 12px; }
+  .setup .drop { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-height: 0; margin: 0; padding: 5px 12px; border-width: 1.5px; }
+  .setup .drop b { font-size: 13px; }
+  .setup .drop span { font-size: 11px; }
+  .setup .body-in { flex-wrap: nowrap; gap: 10px; }
+  .setup .height-in { margin: 0; white-space: nowrap; }
+  .setup .safe { margin: 0; font-size: 11px; color: var(--muted); }
+  .setup-more { position: relative; margin: 0 0 0 auto; }
+  .setup-more summary { font-size: 12px; cursor: pointer; }
+  .setup-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(420px, 92vw); max-height: 70vh; overflow: auto; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); }
+  .dash { display: grid; gap: 8px; grid-template-columns: minmax(300px, 25%) minmax(0, 1.1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); height: max(600px, calc(100vh - var(--player-h, 64px) - var(--top-h, 100px) - 22px)); }
+  .flow { grid-column: 1; grid-row: 1 / 3; min-height: 0; overflow: auto; padding: 8px 10px; }
+  .flow h2 { margin-bottom: 6px; }
+  .dash .stage-box { grid-column: 2; grid-row: 1; height: auto; min-height: 0; }
+  #anglePanel { grid-column: 3; grid-row: 1; }
+  #trajCell { grid-column: 2; grid-row: 2; }
+  #kinCell { grid-column: 3; grid-row: 2; }
+  .dash.lookup { grid-template-columns: minmax(300px, 25%) minmax(0, 1fr); }
+  .dash.lookup .stage-box { grid-row: 1 / 3; }
+  .dash.lookup .cell { display: none; }
+  .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 6px 10px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .cell-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 4px; }
+  .cell-head h2 { margin: 0; font: 700 13.5px/1.3 var(--font-display); }
+  .cell-head h2 small { font: 400 11px var(--font-body); color: var(--muted); }
+  .cell-head .kin-phases { margin-left: auto; gap: 4px; }
+  .cell-head .kin-phases button { padding: 3px 8px; font-size: 11px; }
+  .cell-head .legend { margin-left: auto; gap: 4px; }
+  .cell-head .legend button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; font-size: 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
+  .cell-head .legend button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); font-weight: 700; }
+  .cell-head .legend i { width: 9px; height: 9px; border-radius: 50%; }
+  .see { margin: 0 0 4px; padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb, #f5a524 18%, transparent); font-size: 12px; line-height: 1.4; }
+  .see b { margin-right: 4px; }
+  .plot { position: relative; flex: 1 1 0; min-height: 90px; }
+  .plot canvas, #chart, #trajPlot, #kinChart { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 8px; background: var(--stage-a); }
+  #chart { height: 100%; }
+  .traj-read { margin: 3px 0 0; font-size: 11.5px; }
+  #kinMini .kshare { height: 16px; border-radius: 5px; }
+  #kinMini .kshare i { font-size: 10.5px; }
+  #kinMini .kkey { margin: 2px 0 3px; font-size: 10.5px; gap: 2px 8px; }
+  .tstats { grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 5px; margin-bottom: 6px; }
+  .tstat { padding: 4px 7px; border-radius: 8px; }
+  .tstat span { font-size: 10.5px; }
+  .tstat b { font-size: 15px; }
+  .tstat small { font-size: 10px; }
+  #trajSay { margin: 0 0 6px; padding: 6px 9px; font-size: 12px; line-height: 1.55; }
+  .flow-h { margin: 8px 0 4px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .frows { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+  .frow { appearance: none; display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 7px; align-items: baseline; width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: 400 12px/1.35 var(--font-body); text-align: left; cursor: pointer; }
+  .frow:hover { border-color: var(--muted); }
+  .frow[aria-pressed="true"] { border-color: #f5a524; background: color-mix(in srgb, #f5a524 14%, transparent); }
+  .frow .fdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .frow .fdot.bad { background: var(--bad); }
+  .frow .fdot.warn { background: var(--warn); }
+  .frow .fdot.good { background: var(--ok); }
+  .frow .fdot.info { background: var(--info); }
+  .frow span { font-weight: 700; }
+  .frow small { grid-column: 2; font-size: 11px; color: var(--muted); }
+  .flow details > summary { margin-top: 6px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .flow details .frows { margin-top: 4px; }
+  .chain { margin-top: 6px; padding: 7px 9px; border: 1.5px solid #f5a524; border-radius: 10px; }
+  .chain-title { margin: 0 0 5px; font: 700 13px/1.35 var(--font-display); }
+  .clink { position: relative; margin: 0; padding: 3px 0 5px 11px; border-left: 3px solid var(--c, var(--line)); font-size: 12px; line-height: 1.5; }
+  .clink + .clink { margin-top: 2px; }
+  .clink h4 { margin: 0; font-size: 11px; font-weight: 700; color: var(--c, var(--muted)); }
+  .clink p { margin: 0; }
+  .clink ul { margin: 1px 0 2px; padding-left: 16px; }
+  .clink.a { --c: var(--info); }
+  .clink.b { --c: var(--bad); }
+  .clink.c { --c: #d9860b; }
+  .clink.d { --c: var(--ok); }
+  .ctier { display: grid; grid-template-columns: 4.3em minmax(0, 1fr); align-items: baseline; gap: 4px; margin-top: 3px; }
+  .ctier small { font-size: 10.5px; color: var(--muted); }
+  .chain .mchip { padding: 1px 7px; font-size: 11px; }
+  .mchip.stab { border-color: color-mix(in srgb, #12a594 55%, transparent); color: #0d8476; }
+  .mtag.stab { background: #12a594; }
+  .shows { display: inline-flex; gap: 0; border: 1px solid var(--accent); border-radius: 99px; overflow: hidden; }
+  .shows button { appearance: none; padding: 5px 9px; border: 0; background: var(--panel); color: var(--accent); font: 500 11.5px/1 var(--font-body); cursor: pointer; }
+  .shows button + button { border-left: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+  .shows button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .stage-foot { padding: 4px 8px; }
+  .stage-foot .toolbar { gap: 4px; align-items: center; }
+  .stage-foot .tog { padding: 4px 7px; font-size: 11px; }
+  .tool-sep { margin: 0 2px; }
+  #roleNote i { display: inline-block; width: 10px; height: 10px; margin: 0 3px 0 7px; border-radius: 50%; vertical-align: -1px; }
+  #roleNote i.r1 { background: #e5484d; }
+  #roleNote i.r2 { background: #f5a524; }
+  #roleNote i.r3 { background: #12a594; }
+  .phase strong { font-size: clamp(14px, 1.3vw, 18px); }
+  .phase small { font-size: 11px; }
+  .hint { font-size: 11px; padding: 5px 8px; }
+  .more { display: grid; gap: 8px; grid-template-columns: minmax(0, 1.8fr) repeat(3, minmax(0, 1fr)); align-items: stretch; }
+  #mirrorPanel, #anglesPanel { grid-row: span 2; }
+  #mirrorPanel { cursor: pointer; }
+  .mirror-views { display: grid; gap: 6px; }
+  .mirror-views figure { position: relative; margin: 0; }
+  .mirror-views canvas { display: block; width: 100%; height: 250px; border-radius: 8px; background: var(--stage-a); }
+  #mirrorVideo { background: #0d1318; }
+  .mirror-views figcaption { position: absolute; left: 6px; bottom: 6px; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; color: #fff; background: rgba(0, 0, 0, 0.55); }
+  .log-wrap .log { max-height: 250px; overflow: auto; }
+  .dash .off { display: none !important; }
+  .dash .wide { grid-column: 1 / -1; }
+  .cell-ctl { display: inline-flex; flex: none; margin-left: 6px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .stage-foot .cell-ctl { margin-left: auto; }
+  .cell-ctl button { appearance: none; width: 23px; height: 22px; padding: 0; border: 0; background: var(--panel); color: var(--ink); font: 700 13px/1 var(--font-body); cursor: pointer; }
+  .cell-ctl button + button { border-left: 1px solid var(--line); }
+  .cell-ctl button:hover:not(:disabled) { background: var(--sunk); }
+  .cell-ctl button:disabled { color: var(--line); cursor: default; }
+  .cell-ctl button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  .viewbar { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+  .viewbar span { margin-right: 3px; font-size: 11px; color: var(--muted); }
+  .viewbar button { appearance: none; padding: 4px 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); color: var(--muted); font: 500 11.5px/1 var(--font-body); cursor: pointer; }
+  .viewbar button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .cell-head .traj-pts { margin: 0 0 0 auto; gap: 3px; }
+  .cell-head .tpt { padding: 2px 7px; font-size: 10.5px; }
+  .traj-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; }
+  .traj-foot .note { margin: 0; font-size: 10.5px; }
+  .more .kin { grid-column: 1 / -1; }
+  .more-hidden { display: none; }
+  .more .panel { padding: 8px 10px; }
+  .dash #trajSay { display: none; }
+  .dash #floorNote { display: none; }
+  .tstats { grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); }
+  .stats-h { grid-column: 1 / -1; margin: 0; }
+  .tstat b { font-size: 14px; white-space: nowrap; }
+  .meta > div:nth-child(3), .meta > div:nth-child(4) { display: none; }
+  .flow .adv-meta { font-size: 11px; margin-bottom: 2px; }
+  .flow .adv-auto { padding: 3px 7px; font-size: 11px; margin-bottom: 3px; }
+  .stage-read { bottom: 5px; }
+  #roleNote { font-size: 10.5px; }
+  .plan-wrap { margin-top: 8px; }
+  .plan-wrap > summary { font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .plan { margin-top: 5px; padding: 8px 9px; }
+
+  [id$="Panel"], .stage-box { scroll-margin-top: 10px; }
+  @media (max-width: 1100px) {
+    .dash { height: auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto; }
+    .dash .flow { grid-column: 1 / -1; grid-row: auto; overflow: visible; order: 5; }
+    .dash .stage-box { grid-column: 1 / -1; grid-row: auto; height: 62vh; min-height: 380px; }
+    #anglePanel, #trajCell, #kinCell { grid-column: auto; grid-row: auto; height: 300px; }
+    .more { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    #mirrorPanel { grid-column: 1 / -1; grid-row: auto; }
+    #anglesPanel { grid-row: auto; }
+    .mirror-views { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    #kinCell { grid-column: 1 / -1; }
+    .dash.lookup { grid-template-columns: minmax(0, 1fr); }
+    .dash.lookup .stage-box { grid-row: auto; }
+  }
+  @media (max-width: 720px) {
+    .marktag.guide, .marktag.start, .evtag { display: none; }
+    .dash { grid-template-columns: minmax(0, 1fr); }
+    #anglePanel, #trajCell, #kinCell { grid-column: 1 / -1; order: 1; height: auto; }
+    .cell .plot { flex: none; height: 240px; } /* the chips and notes wrap on a phone: a fixed cell would leave the chart a sliver */
+    .cell-ctl { display: none; } /* every view already fills the width; 表示 above still shows and hides them */
+    .dash .stage-box { order: -1; }
+    .dash .flow { order: 0; } /* the findings right under the figure: on a phone the charts would push them far down */
+    .drop span { display: none; } /* "or drag": a phone has no dragging */
+    .hint { display: none; }
+    .p-main { flex-basis: 100%; flex-wrap: wrap; }
+    #seekBar { order: 9; flex: 1 1 140px; width: auto; }
+    .p-time { order: 10; }
+    .p-nav { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page-error" id="pageError" role="alert" hidden><b>表示の一部で問題が起きました。</b>操作は続けられます。直らないときは、この画面のスクリーンショットを送ってください。<code id="pageErrorText"></code><button type="button" id="pageErrorClose" aria-label="閉じる">×</button></div>
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <svg viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="14" fill="var(--accent)"/><circle cx="15" cy="8.5" r="3" fill="var(--on-accent)"/><path d="M15 12v8m-6-5 6-2 6 2m-9 12 3-7 3 7" stroke="var(--on-accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      <div><b>KINEMA</b><small>動作解析・フォームコーチ</small></div>
+    </div>
+    <div class="meta">
+      <div><label>動画</label><span id="metaSource">サンプル</span></div>
+      <div><label>動き</label><span id="metaMove">スクワット</span></div>
+      <div><label>時間</label><span id="metaTime">00:00.00</span></div>
+      <div><label>コマ</label><span id="metaFrame">0 / 0</span></div>
+      <div><label>状態</label><span><b id="statusPill" class="pill">サンプル</b></span></div>
+    </div>
+    <button id="csvBtn" class="btn" type="button">CSVを書き出す</button>
+  </header>
+
+  <section class="setup" id="setup" aria-label="動画と体の情報">
+    <div class="moves" id="moves" role="group" aria-label="動きの種類">
+          <button type="button" data-move="squat" aria-pressed="true">スクワット</button>
+          <button type="button" data-move="jump" aria-pressed="false">ジャンプ</button>
+          <button type="button" data-move="broad" aria-pressed="false">立ち幅跳び</button>
+        </div>
+    <label class="drop" id="drop">
+      <input id="file" type="file" accept="video/*,.mov,.mp4,.m4v,.webm">
+      <b id="dropTitle">動画を選ぶ</b>
+      <span>またはドラッグ（MOV・MP4）</span>
+    </label>
+    <div class="body-in">
+          <label class="height-in">身長（靴込み）<input id="heightCm" type="number" min="100" max="230" step="1" inputmode="numeric" placeholder="未入力"> cm</label>
+          <label class="height-in">体重<input id="weightKg" type="number" min="20" max="200" step="1" inputmode="numeric" placeholder="未入力"> kg</label>
+        </div>
+    <p class="safe" title="動画はこの端末の中だけで解析され、インターネットには送信されません。">動画は外へ送信されません</p>
+    <div class="viewbar" id="viewBar" role="group" aria-label="表示する図"></div>
+    <details class="howto setup-more"><summary>動画の管理・撮影のコツ</summary>
+      <div class="setup-pop">
+        <div class="session" id="session" hidden>
+          <p class="session-now"><span>いま見ている動画</span><b id="sessionName"></b><small id="sessionInfo"></small></p>
+          <div class="session-acts">
+            <button type="button" class="btn small" id="rerunBtn" title="同じ動画を、AIでもう一度はじめから解析します">もう一度AIで解析</button>
+            <button type="button" class="btn small" id="sampleBtn" title="動画を閉じて、サンプルの表示に戻ります">サンプルに戻る</button>
+          </div>
+          <p class="note tight">動きの種類・身長・体重を変えたり、画面下の「ここから」「ここまで」で範囲を決めたりすると、AI解析をやり直さずにすぐ分析し直します。</p>
+        </div>
+        <div class="session-list" id="sessionListWrap" hidden>
+          <h3>解析した動画 <span>クリックですぐ開けます</span></h3>
+          <ol id="sessionList"></ol>
+          <p class="note tight">解析データはこのページを閉じると消えます。</p>
+        </div>
+        <p class="note tight">身長・体重はどちらも任意です。身長を入れると距離や軌跡の長さが正確になります。靴を履いた動画なら、靴底の分（2〜3cm）を足した高さを入れてください。体重を入れると筋肉の出力を実際の単位（N·m・W）でも表示します。</p>
+        <details class="howto"><summary>撮影のコツ</summary><ul id="tips"></ul></details>
+        <details class="howto"><summary>スマホの動画をパソコンに送るには</summary>
+          <ul>
+            <li>iPhone → Mac：写真アプリで動画を選び「共有 → AirDrop」</li>
+            <li>iCloud写真を使っている場合は、Macの「写真」アプリから書き出す</li>
+            <li>Android：USBケーブル、またはGoogleフォトからダウンロード</li>
+            <li>開けないとき：iPhoneの「設定 → カメラ → フォーマット → 互換性優先」で撮り直す</li>
+          </ul>
+        </details>
+      </div>
+    </details>
+  </section>
+
+  <div class="dash" id="dash">
+    <section class="panel flow" id="advicePanel">
+      <h2>動作の分析 <span>動きから推定</span></h2>
+      <p class="kin-say" id="trajSay" hidden></p>
+      <div class="tstats" id="trajStats"></div>
+      <div id="advice"><p class="empty">解析が終わると、ここに分析が表示されます。</p></div>
+    </section>
+    <section class="panel flow" id="musclePanel" hidden>
+      <h2>筋肉を調べる <span><b id="muscleCount">0</b> 個</span></h2>
+      <div class="listtabs" role="group" aria-label="一覧の切り替え">
+        <button type="button" data-list="core" aria-pressed="true">主要な筋肉（動く人型）</button>
+        <button type="button" data-list="atlas" aria-pressed="false">全身の筋肉（解剖図）</button>
+      </div>
+      <input id="muscleSearch" type="search" placeholder="名前で探す（例：殿筋、ふくらはぎ）" aria-label="筋肉を名前で探す">
+      <section id="muscleInfo" hidden></section>
+      <div id="muscleList"></div>
+      <div id="atlasList" hidden></div>
+    </section>
+
+    <section class="stage-box" id="stagePanel" aria-label="3D表示">
+    <div class="stage" id="stage">
+      <div id="view3d"></div>
+      <div id="callouts"><svg id="calloutLines"></svg></div>
+      <div id="muscleTags"></div>
+      <div id="trailTags"></div>
+      <div id="markTags"></div>
+      <div class="pip" id="pip" title="クリックで拡大／縮小">
+        <video id="video" muted playsinline preload="auto" crossorigin="anonymous" hidden></video>
+        <canvas id="overlay"></canvas>
+        <span class="pip-tag" id="pipTag">サンプル</span>
+      </div>
+      <div class="hint" id="hint"><b>サンプル表示中</b>　合成データで動いています。上の「動画を選ぶ」から、スマホで撮った動画を読み込むと解析します。体をクリックすると、その場所の筋肉を選べます（何個でも選べて、もう一度クリックで外れます）。<button type="button" class="hint-close" id="hintClose" aria-label="案内を閉じる">×</button></div>
+      <div class="progress" id="progress" hidden>
+        <div id="progressText">AIモデルを準備中…</div>
+        <div class="bar-track"><i></i></div>
+        <button type="button" class="btn small" id="progressBtn" hidden>中止する</button>
+      </div>
+      <div class="stage-read">
+        <div class="phase">
+          <strong id="phaseEn"><i></i><span>立っている</span></strong>
+          <small id="phaseJa">スクワット</small>
+        </div>
+        <div class="stage-notes">
+          <p id="outNote" hidden><b>筋肉の出力</b><i class="push"></i>縮みながら力を出す（押す）<i class="brake"></i>伸ばされながら力を出す（ブレーキ）　濃いほど大きな力</p>
+          <p id="roleNote"><b>この動きの筋肉</b><i class="r1"></i>主動作筋<i class="r2"></i>補助筋<i class="r3"></i>安定筋</p>
+          <p id="floorNote" hidden>床の1マス＝25cm（濃い線は1m）<i class="grf"></i>床を押す力<i class="vel"></i>動く方向</p>
+        </div>
+      </div>
+      <p class="atlas-note" id="atlasNote" hidden></p>
+      <p class="credit" id="atlasCredit" hidden>解剖モデル：BodyParts3D, © The Database Center for Life Science（CC BY 4.0）</p>
+      <div class="disp" id="dispPanel" role="group" aria-label="表示の設定" hidden>
+        <div class="disp-head"><b>表示の設定</b><button type="button" id="dispClose" aria-label="閉じる" title="閉じる（Escキー）">×</button></div>
+        <div class="disp-presets" id="dispPresets"></div>
+        <h4>軌跡を描く部分</h4>
+        <div class="disp-pts" id="dispPts"></div>
+        <div id="dispGroups"></div>
+        <h4>3Dの動き</h4>
+        <div class="opts"><button class="tog" type="button" data-ui="turntable" aria-pressed="false" title="3D表示をゆっくり回します">自動回転</button></div>
+      </div>
+    </div>
+      <div class="stage-foot">
+        <div class="toolbar" role="group" aria-label="表示の切り替え">
+          <div class="shows" id="shows" role="group" aria-label="筋肉の表示">
+            <button type="button" data-show="body" aria-pressed="false" title="体だけを表示します">体だけ</button>
+            <button type="button" data-show="roles" aria-pressed="true" title="この動きで使う筋肉を、主動作筋・補助筋・安定筋に色分けして表示します">この動きの筋肉</button>
+            <button type="button" data-show="output" aria-pressed="false" title="動画の各瞬間に、どの筋肉がどれだけ力を出しているか（推定）を色で表示します">筋肉の出力</button>
+            <button type="button" data-show="atlas" aria-pressed="false" title="骨格と全身の筋肉（約380個）を、名前で探したりクリックして調べたりできます">全身を調べる</button>
+          </div>
+          <button class="tog" type="button" data-ui="atlas" aria-pressed="false" hidden>全身の解剖図を見る</button>
+          <button class="tog" type="button" id="dispBtn" aria-pressed="false" title="角度の数字や文字、線や矢印を、1つずつ消したり表示したりできます">表示</button>
+          <button class="tog" type="button" data-ui="labels" aria-pressed="true" title="関節の角度の数字を、3Dと元動画の両方で表示します">角度</button>
+          <button class="tog" type="button" data-ui="trails" aria-pressed="true" title="体の通り道（軌跡）を、3Dと元動画の両方で表示します。描く部分は「表示の設定」で選べます">軌跡</button>
+          <button class="tog" type="button" data-ui="pip" aria-pressed="true" title="元の動画を左上に表示します（動画をクリックすると拡大）">元動画</button>
+          <span class="tool-sep" aria-hidden="true"></span>
+          <button class="tog" type="button" data-view="video" title="撮影したカメラと同じ向きから見ます">動画の向き</button>
+          <button class="tog" type="button" data-view="front" title="体の正面から見ます">正面</button>
+          <button class="tog" type="button" data-view="side" title="体の横から見ます">横</button>
+          <button class="tog" type="button" data-view="back" title="体の後ろから見ます">後ろ</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="cell" id="anglePanel" aria-label="角度の推移">
+      <div class="cell-head">
+        <h2>角度の推移 <small id="chartRep"></small></h2>
+        <div class="legend" id="legend">
+          <button type="button" data-g="hip" aria-pressed="true"><i style="background: var(--tr-hip)"></i>股関節</button>
+          <button type="button" data-g="kn" aria-pressed="true"><i style="background: var(--tr-kn)"></i>膝</button>
+          <button type="button" data-g="sh" aria-pressed="false"><i style="background: var(--tr-sh)"></i>肩</button>
+          <button type="button" data-g="el" aria-pressed="false"><i style="background: var(--tr-wr)"></i>肘</button>
+        </div>
+        <button type="button" class="btn small" id="chartWhole" aria-pressed="false" title="今の回だけと、動画全体を切り替えます">動画全体</button>
+      </div>
+      <p class="see" id="seeAngle" hidden></p>
+      <div class="plot"><canvas id="chart" tabindex="0" aria-label="角度の推移グラフ。クリックでその時点に移動"></canvas></div>
+    </section>
+
+    <section class="cell" id="trajCell" aria-label="軌跡">
+      <div class="cell-head">
+        <h2>軌跡</h2>
+        <div class="traj-pts" id="trajPts" role="group" aria-label="軌跡を描く部分"></div>
+      </div>
+      <p class="see" id="seeTraj" hidden></p>
+      <div class="plot"><canvas id="trajPlot" aria-label="軌跡の図。線をクリックするとその時点に移動"></canvas></div>
+      <div class="traj-foot"><p class="traj-read" id="trajRead"></p><p class="note tight">実線＝床の上、点線＝空中。<span id="trajScale"></span></p></div>
+    </section>
+
+    <section class="cell" id="kinCell" aria-label="筋肉の出力">
+      <div class="cell-head">
+        <h2>筋肉の出力 <small id="kinChartTitle"></small></h2>
+        <div class="kin-phases" id="kinPhases" role="group" aria-label="動きの区間"></div>
+      </div>
+      <p class="see" id="seeKin" hidden></p>
+      <div id="kinMini"></div>
+      <div class="plot"><canvas id="kinChart" aria-label="関節の力の推移。クリックするとその時点に移動"></canvas></div>
+    </section>
+  </div>
+
+  <div class="more" id="moreData">
+    <section class="panel kin" id="kinPanel" aria-label="筋肉の出力の詳細">
+      <h2>筋肉の出力の詳細 <span>推定</span></h2>
+      <p class="note tight">床を押す力と関節の動きから推定しています（筋電図や床反力計で測った値ではありません）。</p>
+      <div class="traj-body">
+        <div><div id="kinJoints"></div><p class="note tight" id="kinLegend"></p></div>
+        <div><h3 class="kin-h">関わる筋肉と出力</h3><div id="kinMuscles"></div></div>
+      </div>
+      <div class="more-hidden"><div id="kinHints"></div><div id="trajHints"></div></div>
+      <p class="note tight" id="kinMethod">計算の方法：床を押す力は重心の加速から（力＝体重×（重力＋加速度））、関節の力は「押す力の線」と関節の距離から、筋肉ごとの値は筋肉の太さ（断面積）の割合で配分した目安です。値は両脚の合計です。</p>
+    </section>
+    <section class="panel mirror" id="mirrorPanel" aria-label="動画と3D">
+      <h2>動画と3D <span>再生中の場面が映ります。押すと分析画面へ戻ります</span></h2>
+      <div class="mirror-views">
+        <figure><canvas id="mirrorVideo"></canvas><figcaption>元動画</figcaption></figure>
+        <figure><canvas id="mirror3d"></canvas><figcaption>3D</figcaption></figure>
+      </div>
+    </section>
+    <section class="panel" id="anglesPanel"><h2>関節の角度（いま）</h2><div class="arows" id="angles"></div>
+        <p class="note">肘・股関節・膝は曲がり具合（まっすぐ＝0°）、肩は腕の上がり具合（下ろす＝0°）。枠はこの動画で動いた範囲、薄い行はカメラから見えにくい側です。</p></section>
+    <section class="panel"><h2>左右差</h2><div class="srows" id="sym"></div></section>
+    <section class="panel"><h2>検出の状態</h2><div class="srows" id="parts"></div></section>
+    <section class="panel">
+      <h2>回数と速さ</h2>
+      <div class="reps"><b id="reps">0</b><span id="repsLabel">回</span></div>
+      <canvas id="spark"></canvas>
+      <div class="kv"><span><i style="background: var(--right)"></i>右手首</span><b id="spdR">0.00</b><small>m/s</small></div>
+      <div class="kv"><span><i style="background: var(--left)"></i>左手首</span><b id="spdL">0.00</b><small>m/s</small></div>
+      <div class="kv"><span><i style="background: var(--ink)"></i>体の移動（1秒平均）</span><b id="spdB">0.00</b><small>m/s</small></div>
+    </section>
+    <section class="panel log-wrap"><h2>動きの区切り</h2><ol class="log" id="log"></ol></section>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="player" id="player" role="group" aria-label="再生の操作">
+  <div class="p-main">
+    <button class="btn primary" id="playBtn" type="button" aria-label="再生">再生</button>
+    <button class="btn" id="backBtn" type="button" aria-label="1コマ戻る" title="1コマ戻る（←キー）">◀︎</button>
+    <button class="btn" id="fwdBtn" type="button" aria-label="1コマ進む" title="1コマ進む（→キー）">▶︎</button>
+    <input id="seekBar" type="range" min="0" max="0" value="0" step="1" aria-label="再生する位置">
+    <span class="p-time" id="playTime">00:00.00 / 00:00.00</span>
+    <button class="btn" id="slowBtn" type="button" aria-pressed="false" title="スローモーションで再生します（Sキー）。遅さは右のメニューで選べます">スロー</button>
+    <select id="rate" aria-label="再生速度">
+      <option value="0.125">1/8倍</option>
+      <option value="0.25">1/4倍</option>
+      <option value="0.5">1/2倍</option>
+      <option value="1" selected>等速</option>
+      <option value="2">2倍</option>
+    </select>
+  </div>
+  <div class="p-rep" id="pRep" role="group" aria-label="見る回" hidden>
+    <button class="btn small" id="repPrev" type="button" aria-label="前の回" title="前の回だけを繰り返し再生します">◀︎</button>
+    <b id="repLabel"></b>
+    <button class="btn small" id="repNext" type="button" aria-label="次の回" title="次の回だけを繰り返し再生します">▶︎</button>
+    <button class="btn small" id="repAll" type="button" title="1回だけの繰り返しをやめて、動画全体を再生します">全部の回</button>
+  </div>
+  <div class="p-range" role="group" aria-label="分析する範囲">
+    <span class="p-label">分析する範囲 <b id="rangeLabel">全体</b></span>
+    <button class="btn small" id="rangeFrom" type="button" title="いま表示している場面を、分析を始める位置にします">ここから</button>
+    <button class="btn small" id="rangeTo" type="button" title="いま表示している場面を、分析を終える位置にします">ここまで</button>
+    <button class="btn small" id="rangeAll" type="button" title="動画全体を分析します">全体に戻す</button>
+  </div>
+  <nav class="p-nav" aria-label="結果の場所へ移動">
+    <button type="button" data-goto="dash">分析画面</button>
+    <button type="button" data-goto="kinPanel">出力の詳細</button>
+    <button type="button" data-goto="moreData">その他のデータ</button>
+  </nav>
+</div>
+
+<!-- ?v= is the version: raise it when a file changes so browsers do not keep an old copy -->
+<script src="js/muscles.js?v=4"></script>
+<script src="js/trajectory.js?v=10"></script>
+<script src="js/kinetics.js?v=11"></script>
+<script src="js/demo.js?v=5"></script>
+<script src="js/analysis.js?v=22"></script>
+<script src="js/figure.js?v=7"></script>
+<script src="js/anatomy-data.js?v=1"></script>
+<script src="js/atlas.js?v=5"></script>
+<script src="js/coach.js?v=3"></script>
+<script src="js/app.js?v=48"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+window.KinemaApp.start({ THREE, OrbitControls, RoomEnvironment, RoundedBoxGeometry });
+</script>
+</body>
+</html>
