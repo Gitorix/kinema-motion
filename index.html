@@ -218,6 +218,59 @@
   #seekBar::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; background: var(--ink); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); }
   #seekBar::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--ink); border: 2px solid var(--panel); }
   #seekBar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  #rangeToggle { display: none; }
+  /* saving and comparing: A blue, B orange everywhere */
+  .lab-btns { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  #saveBtn:not(:disabled) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+  #libCount:not(:empty) { margin-left: 4px; font-weight: 700; color: var(--accent); }
+  .sheet { position: fixed; inset: 0; z-index: 50; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 max(14px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px)); background: var(--bg); }
+  .sheet[hidden] { display: none; }
+  .sheet-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 -14px 10px; padding: calc(8px + env(safe-area-inset-top, 0px)) 14px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .sheet-bar h2 { flex: 1 1 auto; margin: 0; font: 700 15px/1.3 var(--font-display); }
+  .lib-list { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
+  .lib-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .lib-info { flex: 1 1 220px; min-width: 0; }
+  .lib-info b { display: block; overflow-wrap: anywhere; font-size: 13.5px; }
+  .lib-info small { color: var(--muted); font-size: 11.5px; }
+  .lib-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .lib-import { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ca { color: #1f6feb; font-weight: 700; }
+  .cb { color: #c94a06; font-weight: 700; }
+  .cmp-choose { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 10px; }
+  .cmp-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 5px 8px; background: var(--panel); border: 1px solid var(--line); border-left-width: 5px; border-radius: 8px; }
+  .cmp-pick.ca { border-left-color: #1f6feb; }
+  .cmp-pick.cb { border-left-color: #e8590c; }
+  .cmp-pick select { max-width: 200px; font: 500 12.5px/1.2 var(--font-body); padding: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
+  .cmp-pick small { font-weight: 400; color: var(--muted); }
+  .cmp-main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .cmp-main[hidden] { display: none; }
+  .cmp-stage, .cmp-side { display: grid; gap: 8px; min-width: 0; }
+  .cmp-canvas { position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #10151c; }
+  .cmp-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .cmp-canvas video { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; } /* behind the canvas: browsers only play what is on the page */
+  .cmp-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .cmp-ctl .btn.primary { min-width: 5.6em; background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .cmp-ctl select { font: 500 12.5px/1 var(--font-body); padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  #cmpSeek { flex: 1 1 140px; min-width: 100px; accent-color: var(--accent); }
+  .cmp-mix { display: inline-flex; align-items: center; gap: 6px; }
+  .cmp-mix[hidden] { display: none; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; vertical-align: middle; }
+  .seg[hidden] { display: none; }
+  .seg button { appearance: none; padding: 5px 9px; border: 0; background: var(--panel); color: var(--ink); font: 500 11.5px/1.2 var(--font-body); cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .cmp-say, .cmp-figures, .cmp-chart { padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .cmp-say ul { margin: 4px 0; padding-left: 1.2em; font-size: 13px; line-height: 1.6; }
+  .cmp-lead { margin: 0; font-size: 12.5px; }
+  .cmp-figures table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .cmp-figures th, .cmp-figures td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; font-weight: 400; }
+  .cmp-figures th[scope="row"] { text-align: left; color: var(--muted); }
+  .cmp-figures thead .ca, .cmp-figures thead .cb, .cmp-figures td.ca, .cmp-figures td.cb { font-weight: 700; }
+  .cmp-chart h3 { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; margin: 0 0 4px; font: 700 13px/1.3 var(--font-display); }
+  .cmp-chart h3 small { font: 400 11px var(--font-body); color: var(--muted); }
+  .cmp-chart canvas { display: block; width: 100%; height: 190px; touch-action: pan-y; }
+  .cmp-key { margin: 0; font-size: 12px; text-align: center; }
+  @media (max-width: 900px) { .cmp-main { grid-template-columns: minmax(0, 1fr); } .cmp-canvas { aspect-ratio: 4 / 3; } }
   .p-range { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
   .p-range .p-label { font-size: 11.5px; color: var(--muted); }
   .p-range .p-label b { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -459,7 +512,7 @@
   .legend button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
   .legend svg { width: 22px; height: 6px; }
   .legend svg line { stroke: var(--ink); stroke-width: 2; }
-  #chart { display: block; width: 100%; height: 170px; cursor: pointer; touch-action: none; }
+  #chart { display: block; width: 100%; height: 170px; cursor: pointer; touch-action: pan-y; }
   .log-wrap { min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
   .log { list-style: none; margin: 0; padding: 0; overflow: auto; max-height: 196px; border-top: 1px solid var(--line); }
   .log button { appearance: none; width: 100%; display: grid; grid-template-columns: 5.4em 1.2em minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 5px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: 400 12.5px/1.3 var(--font-body); text-align: left; cursor: pointer; }
@@ -634,6 +687,15 @@
     #seekBar { order: 9; flex: 1 1 140px; width: auto; }
     .p-time { order: 10; }
     .p-nav { display: none; }
+    #trajCell .plot { height: min(84vw, 340px); }
+    .traj-legend { margin: 4px 0 0; font-size: 11px; line-height: 1.5; }
+    .traj-legend i { font-style: normal; font-weight: 700; }
+    /* the bar at the foot keeps to what is used all the time: more of the screen for the charts */
+    .player { gap: 4px 8px; background: var(--panel); box-shadow: none; }
+    .p-range { display: none; order: 12; flex-basis: 100%; }
+    .player.range-open .p-range { display: flex; }
+    #rangeToggle { display: inline-flex; margin-left: auto; }
+    .p-rep { flex: 1 1 auto; }
   }
 </style>
 </head>
@@ -666,6 +728,11 @@
       <b id="dropTitle">動画を選ぶ</b>
       <span>またはドラッグ（MOV・MP4）</span>
     </label>
+    <div class="lab-btns" role="group" aria-label="保存と比較">
+      <button class="btn small" id="saveBtn" type="button" disabled>保存</button>
+      <button class="btn small" id="libBtn" type="button">保存した動画<span id="libCount"></span></button>
+      <button class="btn small" id="cmpBtn" type="button">重ねて比較</button>
+    </div>
     <div class="body-in">
           <label class="height-in">身長（靴込み）<input id="heightCm" type="number" min="100" max="230" step="1" inputmode="numeric" placeholder="未入力"> cm</label>
           <label class="height-in">体重<input id="weightKg" type="number" min="20" max="200" step="1" inputmode="numeric" placeholder="未入力"> kg</label>
@@ -805,7 +872,8 @@
       </div>
       <p class="see" id="seeTraj" hidden></p>
       <div class="plot"><canvas id="trajPlot" aria-label="軌跡の図。線をクリックするとその時点に移動"></canvas></div>
-      <div class="traj-foot"><p class="traj-read" id="trajRead"></p><p class="note tight">実線＝床の上、点線＝空中。<span id="trajScale"></span></p></div>
+      <p class="note traj-legend" id="trajLegend" hidden></p>
+        <div class="traj-foot"><p class="traj-read" id="trajRead"></p><p class="note tight">実線＝床の上、点線＝空中。<span id="trajScale"></span></p></div>
     </section>
 
     <section class="cell" id="kinCell" aria-label="筋肉の出力">
@@ -854,6 +922,64 @@
 </div>
 
 <div class="toast" id="toast" role="status" hidden></div>
+<div class="sheet" id="labSheet" role="dialog" aria-modal="true" aria-labelledby="labTitle" hidden>
+  <div class="sheet-bar">
+    <h2 id="labTitle">保存した動画</h2>
+    <button class="btn small" id="labToCompare" type="button">重ねて比較</button>
+    <button class="btn small" id="labToList" type="button">保存した動画</button>
+    <button class="btn small" id="labClose" type="button">閉じる</button>
+  </div>
+  <section id="libView">
+    <p class="note">保存先はこの端末のブラウザの中だけで、インターネットには送られません。ブラウザのデータを消すと一緒に消え、iPhoneでは長く開かないと消されることがあります。残しておきたいものは「ファイルに書き出す」でも保存してください（書き出すのは動きのデータだけで、動画は含みません）。</p>
+    <ol class="lib-list" id="libList"></ol>
+    <p class="note" id="libEmpty" hidden>まだありません。動画を解析したあと、上の「保存」を押すとここに残ります。</p>
+    <p class="lib-import">
+      <label class="btn small">ファイルを読み込む<input id="libImport" type="file" accept=".json,.kinema,application/json" hidden></label>
+      <span class="note" id="libUsage"></span>
+    </p>
+  </section>
+  <section id="cmpView" hidden>
+    <div class="cmp-choose" id="cmpChoose">
+      <div class="cmp-pick ca"><b>A</b><select id="cmp-a-source" aria-label="Aの動画"></select><select id="cmp-a-rep" aria-label="Aの回"></select><small id="cmpNoteA"></small></div>
+      <div class="cmp-pick cb"><b>B</b><select id="cmp-b-source" aria-label="Bの動画"></select><select id="cmp-b-rep" aria-label="Bの回"></select><small id="cmpNoteB"></small></div>
+      <small id="cmpStatus" role="status"></small>
+    </div>
+    <p class="note" id="cmpEmpty" hidden>比べる相手がありません。動画を2本保存するか、2回以上の動きが入った動画を解析すると比べられます。</p>
+    <div class="cmp-main" id="cmpMain" hidden>
+      <div class="cmp-stage">
+        <div class="cmp-canvas">
+          <video id="cmp-a-video" muted playsinline preload="auto" crossorigin="anonymous"></video>
+          <video id="cmp-b-video" muted playsinline preload="auto" crossorigin="anonymous"></video>
+          <canvas id="cmpCanvas"></canvas>
+        </div>
+        <div class="cmp-ctl">
+          <button class="btn primary" id="cmpPlay" type="button">再生</button>
+          <input id="cmpSeek" type="range" step="0.01" aria-label="再生する位置">
+          <select id="cmpRate" aria-label="再生速度"><option value="0.25">1/4倍</option><option value="0.5" selected>1/2倍</option><option value="1">等速</option></select>
+        </div>
+        <div class="cmp-ctl">
+          <span class="seg" id="cmpLayer" role="group" aria-label="見せるもの"><button type="button" data-layer="video" aria-pressed="true">動画＋骨格</button><button type="button" data-layer="bones" aria-pressed="false">骨格だけ</button></span>
+          <label id="cmpMixWrap" class="cmp-mix"><span class="ca">A</span><input id="cmpMix" type="range" min="0" max="1" step="0.05" value="0.5" aria-label="AとBの濃さ"><span class="cb">B</span></label>
+        </div>
+        <p class="note" id="cmpKey"></p>
+      </div>
+      <div class="cmp-side">
+        <div id="cmpSay" class="cmp-say"></div>
+        <div id="cmpFigures" class="cmp-figures"></div>
+        <div class="cmp-chart">
+          <h3>角度の推移 <span class="seg" id="cmpJoints"><button type="button" data-joint="kn" aria-pressed="true">膝</button><button type="button" data-joint="hip" aria-pressed="false">股関節</button><button type="button" data-joint="sh" aria-pressed="false">肩</button></span></h3>
+          <canvas id="cmpAngle"></canvas>
+        </div>
+        <div class="cmp-chart">
+          <h3>重心の軌跡 <small>つま先からの距離と高さ（cm）</small></h3>
+          <canvas id="cmpPath"></canvas>
+        </div>
+        <p class="cmp-key"><span class="ca">━ A（青・実線）</span>　<span class="cb">┅ B（オレンジ・破線）</span></p>
+      </div>
+    </div>
+  </section>
+</div>
+
 <div class="player" id="player" role="group" aria-label="再生の操作">
   <div class="p-main">
     <button class="btn primary" id="playBtn" type="button" aria-label="再生">再生</button>
@@ -882,6 +1008,7 @@
     <button class="btn small" id="rangeTo" type="button" title="いま表示している場面を、分析を終える位置にします">ここまで</button>
     <button class="btn small" id="rangeAll" type="button" title="動画全体を分析します">全体に戻す</button>
   </div>
+  <button class="btn small" id="rangeToggle" type="button" aria-expanded="false">範囲</button>
   <nav class="p-nav" aria-label="結果の場所へ移動">
     <button type="button" data-goto="dash">分析画面</button>
     <button type="button" data-goto="kinPanel">出力の詳細</button>
@@ -899,7 +1026,9 @@
 <script src="js/anatomy-data.js?v=1"></script>
 <script src="js/atlas.js?v=5"></script>
 <script src="js/coach.js?v=3"></script>
-<script src="js/app.js?v=48"></script>
+<script src="js/store.js?v=2"></script>
+<script src="js/compare.js?v=4"></script>
+<script src="js/app.js?v=51"></script>
 <script type="importmap">
 {
   "imports": {

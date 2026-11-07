@@ -152,6 +152,8 @@ window.KinemaApp = {
       for (let i = a; i <= b; i++) if (state.frames[i] && state.frames[i].ok) found++;
       return found / Math.max(1, b - a + 1);
     }
+    // what is on screen: the rest is not drawn until it comes back
+    const seen = { stage: true, angle: true, traj: true, kin: true, more: false };
     const ui = { labels: true, trails: true, turntable: false, muscles: false, pip: true, atlas: false, output: false, show: 'roles' };
     // What is drawn over the video and the 3D view, item by item ("表示の設定"). Kept in this browser only.
     const JOINT_KEYS = ['sh', 'el', 'hip', 'kn'];
@@ -248,7 +250,7 @@ window.KinemaApp = {
 
     // ---------- per-frame metrics ----------
     function resetData(source, name, fps, duration) {
-      Object.assign(state, { source, name, fps, duration, total: 0, analyzed: 0, frames: [], events: [], idx: -1, clock: 0, result: null, autoMove: false, range: [0, Infinity] });
+      Object.assign(state, { source, saved: false, name, fps, duration, total: 0, analyzed: 0, frames: [], events: [], idx: -1, clock: 0, result: null, autoMove: false, range: [0, Infinity] });
       state.rom = Object.fromEntries(ANGLES.map(a => [a.k, [Infinity, -Infinity]]));
       poseIdx = -1;
       repFocus = -1;
@@ -323,13 +325,15 @@ window.KinemaApp = {
     }
 
     // ---------- 3D scene ----------
+    // phones: fewer pixels and a smaller shadow, so that scrolling stays smooth
+    const touchy = matchMedia('(pointer: coarse)').matches;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(devicePixelRatio, touchy ? 1.5 : 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = touchy ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     $('#view3d').append(renderer.domElement);
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -342,10 +346,12 @@ window.KinemaApp = {
     controls.maxDistance = 9;
     controls.maxPolarAngle = Math.PI * 0.52;
     controls.autoRotateSpeed = 1.2;
+    // a finger moving up or down over the figure scrolls the page; sideways it turns the figure
+    if (touchy) renderer.domElement.style.touchAction = 'pan-y';
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
     keyLight.position.set(-2.0, 4.0, 3.0);
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.mapSize.set(touchy ? 1024 : 2048, touchy ? 1024 : 2048);
     Object.assign(keyLight.shadow.camera, { left: -2, right: 2, top: 2.6, bottom: -1.4, near: 0.5, far: 12 });
     keyLight.shadow.bias = -0.0004;
     scene.add(keyLight);
@@ -1031,7 +1037,7 @@ window.KinemaApp = {
       const W = overlay.width, H = overlay.height, dpr = W / (pip.clientWidth || 1);
       if (!W || !H) return; // nothing to draw on, and the grid below would never end
       g.clearRect(0, 0, W, H);
-      if (state.source === 'demo') {
+      if (state.source === 'demo') { // also poses saved without their video
         g.fillStyle = '#1b2733';
         g.fillRect(0, 0, W, H);
         g.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -1432,19 +1438,24 @@ window.KinemaApp = {
       if (!f) return;
       poseIdx = nearestPose(i);
       figure.group.visible = poseIdx >= 0 && !ui.atlas;
-      if (poseIdx >= 0) {
+      const onStage = seen.stage || mirrorOn;
+      if (poseIdx >= 0 && onStage) {
         placePose(state.frames[poseIdx], poseIdx, P3, jump);
         figure.update(P3);
       }
       const output = ui.output && !ui.atlas && !!state.result && !!state.result.kin && state.result.kin.n === state.analyzed;
       figure.setOutput(output && poseIdx >= 0 ? outputAt(poseIdx) : null);
       $('#outNote').hidden = !(output && disp.notes);
-      updateTrails();
-      updateMarks();
+      if (onStage) {
+        updateTrails();
+        updateMarks();
+        drawOverlay(f);
+      }
       updateHud(i);
-      drawOverlay(f);
-      drawSpark();
-      highlightLog(f.t);
+      if (seen.more) {
+        drawSpark();
+        highlightLog(f.t);
+      }
       metaTime.textContent = fmtTime(f.t);
       metaFrame.textContent = `${i + 1} / ${state.total}`;
       seekBar.max = String(Math.max(0, state.analyzed - 1));
@@ -1493,6 +1504,7 @@ window.KinemaApp = {
     }
     function updateHud(i) {
       const f = state.frames[i], m = f.m;
+      if (seen.more) {
       for (const a of ANGLES) {
         const row = hud.angle[a.k];
         row.row.classList.toggle('low', m.ok && m.vis[a.limb] < 0.5);
@@ -1532,6 +1544,7 @@ window.KinemaApp = {
       $('#spdR').textContent = m.ok ? m.spd.rWr.toFixed(2) : '—';
       $('#spdL').textContent = m.ok ? m.spd.lWr.toFixed(2) : '—';
       $('#spdB').textContent = m.ok ? m.spd.body.toFixed(2) : '—';
+      }
       const ph = PHASES[m.phase], stage = stageAt(i);
       phaseEn.querySelector('span').textContent = stage || ph.ja;
       phaseEn.style.color = `var(${stage ? '--accent' : ph.color})`;
@@ -1652,6 +1665,7 @@ window.KinemaApp = {
       for (const el of [playBtn, backBtn, fwdBtn, rateSel, slowBtn, csvBtn, seekBar, rangeFromBtn, rangeToBtn]) el.disabled = !idle;
       updateRangeUi();
       renderSessions();
+      syncLabButtons();
     }
     function updateRangeUi() {
       const n = Math.max(1, state.analyzed - 1), [a, b] = rangeNow(), [pa, pb] = playSpan(), whole = wholeRange();
@@ -1737,7 +1751,7 @@ window.KinemaApp = {
     // the same file again, takes no time. Nothing is stored or sent anywhere, and it is gone when the page closes.
     const MAX_SESSIONS = 6;
     const sessions = [];
-    let currentSession = null, currentUrl = null, currentKey = null;
+    let currentSession = null, currentUrl = null, currentKey = null, currentFile = null, currentSaved = null;
     let moveChosen = false; // the viewer picked a movement while the video was being analysed
     const sessionEl = $('#session'), sessionNameEl = $('#sessionName'), sessionInfoEl = $('#sessionInfo'), rerunBtn = $('#rerunBtn');
     const sessionListWrap = $('#sessionListWrap'), sessionListEl = $('#sessionList');
@@ -1745,6 +1759,8 @@ window.KinemaApp = {
       if (currentUrl && !sessions.some(s => s.url === currentUrl)) URL.revokeObjectURL(currentUrl);
       currentUrl = null;
       currentKey = null;
+      currentFile = null;
+      currentSaved = null;
     }
     function rememberSession() {
       let s = sessions.find(x => x.key === currentKey);
@@ -1757,13 +1773,13 @@ window.KinemaApp = {
         }
       }
       Object.assign(s, {
-        url: currentUrl, name: state.name, fps: state.fps, duration: state.duration, total: state.total, analyzed: state.analyzed, vw: state.vw, vh: state.vh,
+        url: currentUrl, file: currentFile, savedId: currentSaved, name: state.name, fps: state.fps, duration: state.duration, total: state.total, analyzed: state.analyzed, vw: state.vw, vh: state.vh,
         frames: state.frames, events: state.events, rom: state.rom, range: state.range, move: state.move, summary: '',
       });
       currentSession = s;
     }
     function renderSessions() {
-      const onVideo = state.source === 'video';
+      const onVideo = state.source === 'video' || state.saved;
       sessionEl.hidden = !onVideo;
       $('#dropTitle').textContent = onVideo ? '別の動画を選ぶ' : '動画を選ぶ';
       if (onVideo) {
@@ -1791,6 +1807,8 @@ window.KinemaApp = {
       if (currentUrl !== s.url) dropUnusedUrl();
       currentUrl = s.url;
       currentKey = s.key;
+      currentFile = s.file || null;
+      currentSaved = s.savedId || null;
       video.src = s.url;
       try {
         await loadVideo(video);
@@ -2031,6 +2049,7 @@ window.KinemaApp = {
       dropUnusedUrl();
       currentUrl = URL.createObjectURL(file);
       currentKey = key;
+      currentFile = file;
       openVideo(currentUrl, file.name);
     }
 
@@ -2054,7 +2073,7 @@ window.KinemaApp = {
           moveChosen = true;
           return;
         }
-        if (state.source === 'demo') showDemo();
+        if (state.source === 'demo' && !state.saved) showDemo();
         else if (state.analyzed) {
           runAnalysis();
           showFrame(state.idx, true);
@@ -2248,7 +2267,7 @@ window.KinemaApp = {
       const rate = detectionRate();
       const row = c => `<li><button type="button" class="frow" data-id="${c.id}" aria-pressed="false"><i class="fdot ${c.status}"></i><span>${esc(c.title)}</span><small>${esc(c.value)}</small></button></li>`;
       adviceEl.innerHTML = `
-        <p class="adv-meta">${esc(window.KinemaAnalysis.MOVES[r.move].ja)} ・ ${VIEW[r.view]} ・ ${r.reps.length}${unit}${state.source === 'demo' ? ' ・ サンプル' : ''}${wholeRange() ? '' : ` ・ ${rangeLabel.textContent}`}</p>
+        <p class="adv-meta">${esc(window.KinemaAnalysis.MOVES[r.move].ja)} ・ ${VIEW[r.view]} ・ ${r.reps.length}${unit}${state.source === 'demo' && !state.saved ? ' ・ サンプル' : ''}${wholeRange() ? '' : ` ・ ${rangeLabel.textContent}`}</p>
         ${rate < 0.85 ? `<p class="adv-warn">人物を検出できたのは ${Math.round(rate * 100)}% のコマです。検出できなかった場面があるため、結果がずれることがあります。</p>` : ''}
         ${state.autoMove ? `<p class="adv-auto">動画の動きから「${esc(window.KinemaAnalysis.MOVES[r.move].ja)}」と判定しました。違うときは、上のボタンで切り替えられます。</p>` : ''}
         ${r.skipped ? `<p class="adv-meta">歩いている場面など、${r.move === 'squat' ? 'スクワット' : 'ジャンプ'}ではない動きを ${r.skipped} か所除いて分析しました。</p>` : ''}
@@ -2335,7 +2354,7 @@ window.KinemaApp = {
 
     // ---------- trajectory panel ----------
     // The paths seen the way the camera saw them, in centimetres with the floor at zero, plus what they show.
-    const trajPtsEl = $('#trajPts'), trajPlotEl = $('#trajPlot'), trajHintsEl = $('#trajHints');
+    const trajPtsEl = $('#trajPts'), trajPlotEl = $('#trajPlot'), trajHintsEl = $('#trajHints'), trajLegendEl = $('#trajLegend');
     const trajReadEl = $('#trajRead'), trajScaleEl = $('#trajScale');
     const SCALE_NOTE = {
       height: '長さの基準：入力した身長',
@@ -2465,8 +2484,12 @@ window.KinemaApp = {
       });
       const series = [...trajUi.points].flatMap(p => TP.seriesOf(p, r.side).map(k => ({ k, p, s: T.m[k] })));
       if (!series.length) { message('上の色のボタンで、描く部分を選んでください'); return; }
+      // on a phone every centimetre of width counts: the scale follows this repetition alone
+      const narrow = W < 480;
+      trajLegendEl.hidden = !narrow;
       let x0 = Infinity, x1 = -Infinity, y1 = 0;
       segs.forEach(([a, b], j) => {
+        if (narrow && j !== cur) return;
         for (const { s } of series) {
           for (let i = a; i <= b; i++) {
             const x = s.x[i] - shift[j][0], y = s.y[i] - shift[j][1];
@@ -2476,7 +2499,10 @@ window.KinemaApp = {
       });
       if (!Number.isFinite(x0)) { message('この区間では体を検出できませんでした'); return; }
       // same scale across and up, floor at the bottom
-      const padL = 46, padR = 14, padT = 14, padB = 36;
+      const padL = narrow ? 30 : 46, padR = narrow ? 8 : 14, padT = 14, padB = narrow ? 32 : 36;
+      // room above for the arrow of this jump's angle and its label
+      const rep0 = r.reps && r.reps[cur], leave0 = r.move === 'broad' && rep0 && Number.isFinite(rep0.angle) ? r.trajView.events.find(e => e.ja === '踏み切り' && e.i >= segs[cur][0] && e.i <= segs[cur][1]) : null;
+      if (leave0 && Number.isFinite(T.m.com.y[leave0.i - 1])) y1 = Math.max(y1, T.m.com.y[leave0.i - 1] - shift[cur][1] + 0.55 * Math.sin(rep0.angle * Math.PI / 180) + 0.1);
       const k = Math.min((W - padL - padR) / Math.max(x1 - x0, 0.4), (H - padT - padB) / Math.max(y1 * 1.06, 0.4));
       // a path of over a kilometre means the scale could not be read (the grid below would never end)
       if (!(k > 0) || x1 - x0 > 1000 || y1 > 1000 || Math.abs(x0) > 1e4) { message('この動画では、軌跡の長さを正しく計算できませんでした'); return; }
@@ -2484,8 +2510,9 @@ window.KinemaApp = {
       const X = x => midX + (x - cx) * k, Y = y => H - padB - y * k, xAt = px => cx + (px - midX) / k;
       // squares of 5, 10, 25, 50 cm or 1 m (25 cm, like the floor in 3D, once the movement is wide)
       const span = Math.max(W - padL - padR, H - padT - padB) / k;
-      let step = [0.05, 0.1, 0.25, 0.5, 1].find(s => span / s <= 12);
-      if (!step) { step = 1; while (span / step > 12) step *= 2; }
+      const most = narrow ? 7 : 12;
+      let step = [0.05, 0.1, 0.25, 0.5, 1].find(s => span / s <= most);
+      if (!step) { step = 1; while (span / step > most) step *= 2; }
       g.lineWidth = 1;
       g.font = '10px "Zen Kaku Gothic New", sans-serif';
       g.strokeStyle = tokens['--line'];
@@ -2512,28 +2539,48 @@ window.KinemaApp = {
       g.textAlign = 'center';
       g.textBaseline = 'bottom';
       const across = !aligned ? (T.view === 'front' ? '左右（cm）' : '前後（cm）') : r.move === 'broad' ? '踏み切り線からの距離（cm）' : '足の真ん中からの距離（cm）';
-      g.fillText(T.view === 'front' ? `← 画面の左　　${across}　　画面の右 →` : `← 後ろ　　${across}　　前 →`, midX, H - 2);
-      g.save();
-      g.translate(12, padT + (H - padT - padB) / 2);
-      g.rotate(-Math.PI / 2);
-      g.textBaseline = 'middle';
-      g.fillText('高さ（cm）', 0, 0);
-      g.restore();
-      g.textAlign = 'right';
-      g.textBaseline = 'top';
-      g.fillText(`1マス＝${Math.round(step * 100)}cm`, W - padR - 4, padT + 4);
-      g.textAlign = 'left';
-      let lx = padL + 6;
-      for (const [text, color] of [['━ 床を押す力', '--warn'], ['━ 動く方向', '--ink'], ...(r.move === 'broad' ? [] : [['┅ 理想の線', '--ok']])]) {
-        g.fillStyle = tokens[color];
-        g.fillText(text, lx, padT + 4);
-        lx += g.measureText(text).width + 12;
+      const acrossNow = narrow ? '距離（cm）' : across;
+      g.fillText(T.view === 'front' ? `← ${narrow ? '左' : '画面の左'}　　${acrossNow}　　${narrow ? '右' : '画面の右'} →` : `← 後ろ　　${acrossNow}　　前 →`, midX, H - 2);
+      if (narrow) {
+        // the legend sits under the chart: over it, the words would lie on top of the path
+        trajLegendEl.innerHTML = `<i style="color:${tokens['--warn']}">━</i> 床を押す力　<i style="color:${tokens['--ink']}">━</i> 動く方向　<i style="color:${tokens['--ok']}">┅</i> ${r.move === 'broad' ? '目安の角度（25〜45°）' : '理想の線'}　縦は高さ（cm）・1マス ${Math.round(step * 100)}cm`;
+      } else {
+        g.save();
+        g.translate(12, padT + (H - padT - padB) / 2);
+        g.rotate(-Math.PI / 2);
+        g.textBaseline = 'middle';
+        g.fillText('高さ（cm）', 0, 0);
+        g.restore();
+        g.textAlign = 'right';
+        g.textBaseline = 'top';
+        g.fillText(`1マス＝${Math.round(step * 100)}cm`, W - padR - 4, padT + 4);
+        g.textAlign = 'left';
+        let lx = padL + 6;
+        for (const [text, color] of [['━ 床を押す力', '--warn'], ['━ 動く方向', '--ink'], ...(r.move === 'broad' ? [] : [['┅ 理想の線', '--ok']])]) {
+          g.fillStyle = tokens[color];
+          g.fillText(text, lx, padT + 4);
+          lx += g.measureText(text).width + 12;
+        }
       }
+      // words never lie on top of one another: each takes the first free place around its point
+      const taken = [];
+      const placeLabel = (text, x, y, gap = 6) => {
+        const w = g.measureText(text).width, h = 13;
+        const spots = [[x + gap, y - 4], [x + gap, y + 4 + h], [x - gap - w, y - 4], [x - gap - w, y + 4 + h], [x - w / 2, y - 10], [x - w / 2, y + 12 + h]];
+        const free = ([sx, sy]) => sx >= padL && sx + w <= W - 2 && sy - h >= 0 && sy <= H - padB && !taken.some(b => sx < b[0] + b[2] && sx + w > b[0] && sy - h < b[1] + b[3] && sy > b[1]);
+        const at = spots.find(free) || spots[0];
+        taken.push([at[0], at[1] - h, w, h]);
+        return at;
+      };
       // the ideal direction (dashed): straight down and up over the start, or the range of good take-off angles
       const com = T.m.com, now = state.idx;
       const [ox, oy] = shift[cur], [a0, b0] = segs[cur];
       const thisRep = r.reps && r.reps[cur], flew = (r.flights || []).find(f => f.takeoff >= a0 && f.takeoff <= b0);
       let launch = null;
+      g.save();
+      g.beginPath();
+      g.rect(padL, 0, W - padL - padR, H - padB);
+      g.clip();
       g.strokeStyle = tokens['--ok'];
       g.lineWidth = 1.5;
       g.setLineDash([6, 4]);
@@ -2554,7 +2601,8 @@ window.KinemaApp = {
       }
       g.stroke();
       g.setLineDash([]);
-      if (launch) {
+      g.restore();
+      if (launch && !narrow) {
         g.fillStyle = tokens['--ok'];
         g.textAlign = 'left';
         g.textBaseline = 'bottom';
@@ -2616,9 +2664,10 @@ window.KinemaApp = {
         g.textBaseline = 'bottom';
         g.lineWidth = 3;
         g.strokeStyle = '#fff';
-        g.strokeText(`この回 ${thisRep.angle}°`, X(tipX) + 5, Y(tipY) - 2);
+        const [tx, ty] = placeLabel(`この回 ${thisRep.angle}°`, X(tipX), Y(tipY), 5);
+        g.strokeText(`この回 ${thisRep.angle}°`, tx, ty);
         g.fillStyle = tokens['--accent'];
-        g.fillText(`この回 ${thisRep.angle}°`, X(tipX) + 5, Y(tipY) - 2);
+        g.fillText(`この回 ${thisRep.angle}°`, tx, ty);
       }
       // key moments on the centre of mass (or the first path)
       const ref = series.find(o => o.k === 'com') || series[0];
@@ -2643,9 +2692,10 @@ window.KinemaApp = {
         if (named.has(ev)) {
           g.lineWidth = 3;
           g.strokeStyle = '#fff';
-          g.strokeText(ev.ja, X(x) + 6, Y(y) - 4);
+          const [tx, ty] = placeLabel(ev.ja, X(x), Y(y));
+          g.strokeText(ev.ja, tx, ty);
           g.fillStyle = tokens['--ink'];
-          g.fillText(ev.ja, X(x) + 6, Y(y) - 4);
+          g.fillText(ev.ja, tx, ty);
         }
       }
       const inside =!aligned || (now >= spanOf(segs[cur])[0] && now <= spanOf(segs[cur])[1]);
@@ -2716,7 +2766,7 @@ window.KinemaApp = {
       arrowHead(g, x1, y1, Math.atan2(y1 - y0, x1 - x0), 7);
     }
     // a click on the plot jumps to the moment of the nearest point on a path
-    trajPlotEl.addEventListener('pointerdown', e => {
+    trajPlotEl.addEventListener('click', e => {
       if (!trajGeom || state.analyzing) return;
       const rect = trajPlotEl.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
       let best = null;
@@ -2944,7 +2994,7 @@ window.KinemaApp = {
       }
       kinGeom = { i0, i1, padL, padR, W };
     }
-    kinChartEl.addEventListener('pointerdown', e => {
+    kinChartEl.addEventListener('click', e => {
       if (!kinGeom || state.analyzing) return;
       const rect = kinChartEl.getBoundingClientRect(), u = (e.clientX - rect.left - kinGeom.padL) / (kinGeom.W - kinGeom.padL - kinGeom.padR);
       setPlaying(false);
@@ -3429,15 +3479,29 @@ window.KinemaApp = {
       const { padL, padR, W, t0, t1 } = chart.geom;
       seekTime(t0 + clamp((e.clientX - r.left - padL) / (W - padL - padR), 0, 1) * (t1 - t0));
     }
-    chartEl.addEventListener('pointerdown', e => {
-      if (state.analyzing) return;
+    let touchAt = null; // a finger on the chart: a tap or a sideways drag moves the position, up and down scrolls the page
+    const startScrub = e => {
       scrubbing = true;
+      touchAt = null;
       chartEl.setPointerCapture(e.pointerId);
       setPlaying(false);
       chartSeek(e);
+    };
+    chartEl.addEventListener('pointerdown', e => {
+      if (state.analyzing) return;
+      if (e.pointerType === 'touch') touchAt = e.clientX;
+      else startScrub(e);
     });
-    chartEl.addEventListener('pointermove', e => { if (scrubbing) chartSeek(e); });
-    chartEl.addEventListener('pointerup', () => { scrubbing = false; });
+    chartEl.addEventListener('pointermove', e => {
+      if (scrubbing) chartSeek(e);
+      else if (touchAt !== null && Math.abs(e.clientX - touchAt) > 8) startScrub(e);
+    });
+    chartEl.addEventListener('pointerup', e => {
+      if (touchAt !== null) { setPlaying(false); chartSeek(e); }
+      scrubbing = false;
+      touchAt = null;
+    });
+    chartEl.addEventListener('pointercancel', () => { scrubbing = false; touchAt = null; });
     // space: play / pause (a focused button keeps its own space), arrows: one frame, Esc: remove every picked muscle
     document.addEventListener('keydown', e => {
       const el = e.target instanceof Element ? e.target : document.body;
@@ -3537,12 +3601,246 @@ window.KinemaApp = {
       camera.position.x += dx;
     }
 
+    // ---------- saved videos and the comparison ----------
+    const Store = window.KinemaStore, labSheet = $('#labSheet'), saveBtn = $('#saveBtn'), libList = $('#libList');
+    let savedList = [];
+    const emptyRom = () => Object.fromEntries(ANGLES.map(a => [a.k, [Infinity, -Infinity]]));
+    const moveJa = m => window.KinemaAnalysis.MOVES[m].ja;
+    const bareFrames = frames => frames.map(f => (f.ok ? { t: f.t, ok: true, w: f.w, img: f.img, vis: f.vis } : { t: f.t, ok: false, w: null, img: null, vis: null }));
+    // the per-frame figures of frames that are not on screen (computeMetrics reads the state, nothing here waits)
+    function hydrate(rec) {
+      const keep = { frames: state.frames, rom: state.rom, events: state.events, fps: state.fps, vw: state.vw, vh: state.vh };
+      Object.assign(state, { frames: rec.frames, rom: emptyRom(), events: [], fps: rec.fps, vw: rec.vw, vh: rec.vh });
+      try {
+        rec.frames.forEach((f, i) => { f.m = computeMetrics(i); });
+        return { rom: state.rom, events: state.events };
+      } finally {
+        Object.assign(state, keep);
+      }
+    }
+    function syncLabButtons() {
+      const can = state.source === 'video' && !state.analyzing && state.analyzed > 0;
+      saveBtn.disabled = !can || !!currentSaved;
+      saveBtn.textContent = currentSaved ? '保存済み' : '保存';
+    }
+    async function refreshSaved() {
+      try { savedList = await Store.list(); } catch (err) { savedList = []; reportProblem(err); }
+      $('#libCount').textContent = savedList.length ? String(savedList.length) : '';
+    }
+    const figuresLine = rec => [moveJa(rec.move), rec.reps ? `${rec.reps}回` : '', Number.isFinite(rec.best) ? `最長 ${rec.best.toFixed(2)} m` : ''].filter(Boolean).join('・');
+    const newId = () => `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const metaOf = (id, name, move, r, hasVideo, sizeMB) => {
+      const dist = (r && r.reps || []).map(x => x.meters).filter(Number.isFinite);
+      return { id, name, move, savedAt: Date.now(), reps: r && r.reps ? r.reps.length : 0, best: dist.length ? Math.max(...dist) : null, hasVideo, sizeMB };
+    };
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = '保存中…';
+      const id = newId(), file = currentFile;
+      const meta = metaOf(id, state.name, state.move, state.result, !!file, file ? file.size / 1048576 : 0);
+      const data = { id, fps: state.fps, vw: state.vw, vh: state.vh, duration: state.duration, total: state.total, analyzed: state.analyzed, frames: bareFrames(state.frames.slice(0, state.analyzed)), heightCm: userHeight(), weightKg: userWeight(), video: file || null };
+      try {
+        const done = await Store.save(meta, data);
+        currentSaved = id;
+        if (currentSession) currentSession.savedId = id;
+        toast(done.video || !file ? '保存しました。「保存した動画」から開いたり、重ねて比較したりできます。' : '端末の空きが足りず動画は保存できなかったので、動きのデータだけ保存しました。');
+      } catch (err) {
+        reportProblem(err);
+        toast('保存できませんでした。ブラウザのプライベートモードでは保存できないことがあります。');
+      }
+      await refreshSaved();
+      syncLabButtons();
+    });
+    function renderLibrary() {
+      $('#libEmpty').hidden = savedList.length > 0;
+      libList.innerHTML = savedList.map(rec => `<li>
+        <div class="lib-info"><b>${esc(rec.name)}</b><small>${new Date(rec.savedAt).toLocaleDateString('ja-JP')}・${esc(figuresLine(rec))}・${rec.hasVideo ? `動画つき（${Math.max(1, Math.round(rec.sizeMB))} MB）` : '動きのデータのみ'}</small></div>
+        <div class="lib-acts" data-id="${esc(rec.id)}">
+          <button class="btn small" type="button" data-do="open">開く</button>
+          <button class="btn small" type="button" data-do="compare">重ねて比較</button>
+          <button class="btn small" type="button" data-do="export">ファイルに書き出す</button>
+          <button class="btn small" type="button" data-do="delete">削除</button>
+        </div></li>`).join('');
+      const usage = $('#libUsage');
+      usage.textContent = '';
+      if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { usage.textContent = `使用量 約${Math.round((e.usage || 0) / 1048576)} MB`; }).catch(() => {});
+    }
+    libList.addEventListener('click', async e => {
+      const b = e.target.closest('[data-do]');
+      if (!b) return;
+      const id = b.parentElement.dataset.id, rec = savedList.find(x => x.id === id), act = b.dataset.do;
+      if (!rec) return;
+      if (act === 'open') { closeSheet(); await openSaved(id); }
+      if (act === 'compare') await showSheet('compare', id);
+      if (act === 'export') {
+        try {
+          const data = await Store.get(id);
+          const a = document.createElement('a'), url = URL.createObjectURL(new Blob([Store.toFile(rec, data)], { type: 'application/json' }));
+          a.href = url;
+          a.download = `${rec.name.replace(/\.[^.]+$/, '')}.kinema.json`;
+          document.body.append(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+        } catch (err) { reportProblem(err); toast('書き出せませんでした。'); }
+      }
+      if (act === 'delete') {
+        // removing cannot be undone: the button asks once more
+        if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = '本当に削除'; return; }
+        try {
+          await Store.remove(id);
+          if (currentSaved === id) currentSaved = null;
+          for (const s of sessions) if (s.savedId === id) s.savedId = null;
+        } catch (err) { reportProblem(err); toast('削除できませんでした。'); }
+        await refreshSaved();
+        renderLibrary();
+        syncLabButtons();
+      }
+    });
+    $('#libImport').addEventListener('change', async e => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        if (file.size > 200 * 1048576) throw new Error('too large');
+        const rec = Store.fromFile(await file.text()), id = newId();
+        const frames = rec.frames;
+        const copy = { frames: frames.map(f => ({ ...f })), fps: rec.fps, vw: rec.vw, vh: rec.vh };
+        hydrate(copy);
+        const r = window.KinemaAnalysis.analyze(rec.move, copy.frames, rec.vw, rec.vh, { heightCm: rec.heightCm, weightKg: rec.weightKg });
+        await Store.save(metaOf(id, rec.name, rec.move, r, false, 0), { ...rec, id, video: null });
+        await refreshSaved();
+        renderLibrary();
+        toast('読み込みました。動画は含まれないので、動きのデータで表示します。');
+      } catch {
+        toast('このファイルは読み込めませんでした。KINEMAで書き出したファイルを選んでください。');
+      }
+    });
+    // back to a saved video: the AI's work is kept, so only the analysis runs again
+    async function openSaved(id) {
+      let data, rec;
+      try {
+        data = await Store.get(id);
+        rec = savedList.find(x => x.id === id);
+        if (!data || !rec) throw new Error('missing');
+      } catch (err) { reportProblem(err); toast('この動画を開けませんでした。'); return; }
+      const run = ++state.runId;
+      setPlaying(false);
+      progressEl.hidden = true;
+      dropUnusedUrl();
+      let url = null;
+      if (data.video) {
+        url = URL.createObjectURL(data.video);
+        video.src = url;
+        try { await loadVideo(video); } catch { URL.revokeObjectURL(url); url = null; toast('動画を開けなかったので、動きのデータだけ表示します。'); }
+        if (run !== state.runId) return;
+      }
+      if (!url) { video.removeAttribute('src'); video.load(); }
+      currentUrl = url;
+      currentKey = `saved:${id}`;
+      currentFile = data.video || null;
+      currentSaved = id;
+      resetData(url ? 'video' : 'demo', rec.name, data.fps, data.duration);
+      Object.assign(state, { saved: !url, vw: data.vw, vh: data.vh, total: data.total, move: rec.move });
+      if (data.heightCm) heightIn.value = String(data.heightCm);
+      if (data.weightKg) weightIn.value = String(data.weightKg);
+      footLevel = null;
+      plan = null;
+      clearTrails();
+      levelQ.identity();
+      data.frames.forEach((f, i) => { state.frames.push(f); f.m = computeMetrics(i); });
+      state.analyzed = data.analyzed;
+      trajUi.points = new Set(TRAJ_DEFAULT[rec.move]);
+      syncMoveButtons();
+      metaSource.textContent = rec.name;
+      pipTag.textContent = url ? '元の動画' : '保存データ';
+      video.hidden = !url;
+      hint.hidden = true;
+      layoutPip();
+      logEl.textContent = '';
+      logged = 0;
+      guard(updateLevel);
+      if (url) rememberSession();
+      renderLog();
+      setStatus('ok', '保存した動画');
+      updateControls();
+      showResults(true);
+    }
+    // what can be compared: what is open now, and everything saved
+    const compare = window.createKinemaCompare({
+      esc, guard, report: reportProblem, tokens: () => tokens,
+      async sources() {
+        await refreshSaved();
+        const list = [];
+        if (state.analyzed && !state.analyzing && (state.source === 'video' || state.saved) && !currentSaved) list.push({ id: 'now', label: `いま開いている動画（${state.name}）` });
+        for (const rec of savedList) list.push({ id: rec.id, label: `${rec.name}（${new Date(rec.savedAt).toLocaleDateString('ja-JP')}）` });
+        // the sample comes last: enough to try out comparing the repetitions of a squat
+        if (state.analyzed && !state.analyzing && state.source === 'demo' && !state.saved) list.push({ id: 'now', label: `サンプル（${moveJa(state.move)}）` });
+        return list;
+      },
+      async load(id) {
+        if (id === 'now') {
+          return { label: state.name, move: state.move, fps: state.fps, vw: state.vw, vh: state.vh, frames: state.frames.slice(0, state.analyzed), result: state.result, url: state.source === 'video' ? currentUrl : null, ownUrl: false };
+        }
+        const data = await Store.get(id), rec = savedList.find(x => x.id === id);
+        if (!data || !rec) throw new Error('saved video missing');
+        hydrate(data);
+        const result = window.KinemaAnalysis.analyze(rec.move, data.frames, data.vw, data.vh, { heightCm: data.heightCm || 0, weightKg: data.weightKg || 0 });
+        return { label: rec.name, move: rec.move, fps: data.fps, vw: data.vw, vh: data.vh, frames: data.frames, result, url: data.video ? URL.createObjectURL(data.video) : null, ownUrl: !!data.video };
+      },
+    });
+    async function showSheet(mode, preferId) {
+      setPlaying(false);
+      sheetOpen = true;
+      labSheet.hidden = false;
+      document.documentElement.style.overflow = 'hidden'; // only the sheet scrolls
+      const list = mode === 'list';
+      $('#labTitle').textContent = list ? '保存した動画' : '重ねて比較';
+      $('#libView').hidden = !list;
+      $('#cmpView').hidden = list;
+      $('#labToCompare').hidden = !list;
+      $('#labToList').hidden = list;
+      labSheet.scrollTop = 0;
+      if (list) {
+        compare.stop();
+        await refreshSaved();
+        renderLibrary();
+      } else {
+        const preferNow = !currentSaved && state.analyzed && (state.source === 'video' || state.saved) ? 'now' : currentSaved;
+        try { await compare.start(preferId || preferNow); } catch (err) { reportProblem(err); toast('比較を開けませんでした。'); }
+      }
+    }
+    function closeSheet() {
+      compare.stop();
+      labSheet.hidden = true;
+      sheetOpen = false;
+      document.documentElement.style.overflow = '';
+    }
+    $('#libBtn').addEventListener('click', () => showSheet('list'));
+    $('#cmpBtn').addEventListener('click', () => showSheet('compare'));
+    $('#labToCompare').addEventListener('click', () => showSheet('compare'));
+    $('#labToList').addEventListener('click', () => showSheet('list'));
+    $('#labClose').addEventListener('click', closeSheet);
+    $('#rangeToggle').addEventListener('click', e => {
+      const on = $('#player').classList.toggle('range-open');
+      e.currentTarget.setAttribute('aria-expanded', String(on));
+    });
+    refreshSaved();
+
     // ---------- loop ----------
     let lastNow = performance.now();
     // the video and the 3D view again, beside the data lower down the page, only while they are on screen
     const mirrorVideo = $('#mirrorVideo'), mirror3d = $('#mirror3d');
     let mirrorOn = false;
-    new IntersectionObserver(seen => { mirrorOn = seen.some(e => e.isIntersecting); }).observe($('#mirrorPanel'));
+    new IntersectionObserver(list => { mirrorOn = list.some(e => e.isIntersecting); }).observe($('#mirrorPanel'));
+    const seenOf = [['stage', '#stagePanel'], ['angle', '#anglePanel'], ['traj', '#trajCell'], ['kin', '#kinCell'], ['more', '#moreData']];
+    for (const [k, sel] of seenOf) {
+      new IntersectionObserver(list => {
+        const on = list[list.length - 1].isIntersecting, back = on && !seen[k];
+        seen[k] = on;
+        if (back && (k === 'stage' || k === 'more') && state.idx >= 0) guard(showFrame, state.idx, k === 'stage');
+      }).observe($(sel));
+    }
     $('#mirrorPanel').addEventListener('click', () => $('#dash').scrollIntoView({ behavior: 'smooth', block: 'start' }));
     function mirrorCanvas(cv) {
       const dpr = Math.min(devicePixelRatio, 1.5), w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
@@ -3573,27 +3871,41 @@ window.KinemaApp = {
       lastNow = now;
       if (state.playing) guard(stepPlayback, dt);
       controls.autoRotate = ui.turntable;
-      guard(stepView, dt);
-      guard(followFigure, dt);
-      guard(() => {
-        controls.update();
-        figure.tick(now / 1000);
-        atlas.tick(now / 1000);
-        renderer.render(scene, camera);
-      });
-      guard(drawMirror);
-      guard(updateCallouts);
-      guard(updateTags);
-      guard(updateEventTags);
-      guard(updateMarkTags);
-      guard(updateHover);
-      if (chart.dirty && now - chart.lastBase > 120) { guard(drawChartBase); chart.lastBase = now; }
-      if (chart.lastIdx !== state.idx) guard(drawChart);
-      if (trajPlotDirty || trajPlotIdx !== state.idx) guard(drawTrajPlot);
-      if (kinChartDirty || kinChartIdx !== state.idx) guard(drawKinChart);
+      if (seen.stage || mirrorOn) {
+        guard(stepView, dt);
+        guard(followFigure, dt);
+        guard(() => {
+          controls.update();
+          figure.tick(now / 1000);
+          atlas.tick(now / 1000);
+          renderer.render(scene, camera);
+        });
+        guard(drawMirror);
+      }
+      if (seen.stage) {
+        guard(updateCallouts);
+        guard(updateTags);
+        guard(updateEventTags);
+        guard(updateMarkTags);
+        guard(updateHover);
+      }
+      if (touchy && now - lastCharts < 80) return; // the charts follow a little less often on a phone
+      lastCharts = now;
+      if (seen.angle) {
+        if (chart.dirty && now - chart.lastBase > 120) { guard(drawChartBase); chart.lastBase = now; }
+        if (chart.lastIdx !== state.idx) guard(drawChart);
+      }
+      if (seen.traj && (trajPlotDirty || trajPlotIdx !== state.idx)) guard(drawTrajPlot);
+      if (seen.kin && (kinChartDirty || kinChartIdx !== state.idx)) guard(drawKinChart);
     }
+    // While a finger scrolls the page nothing is drawn: the page gets the whole of the phone's attention.
+    let scrollingUntil = 0, lastFrame = 0, lastCharts = 0, sheetOpen = false;
+    addEventListener('scroll', () => { scrollingUntil = performance.now() + 180; }, { passive: true });
     function tick(now) {
       requestAnimationFrame(tick); // asked for first: one bad frame must never stop the 3D view
+      if (sheetOpen) { lastNow = now; return; } // the saved videos and the comparison cover the page
+      if (touchy && (now < scrollingUntil || now - lastFrame < 28)) { if (now < scrollingUntil) lastNow = now; return; }
+      lastFrame = now;
       frame(now);
     }
 
@@ -3646,6 +3958,11 @@ window.KinemaApp = {
         setIndex(0, true);
       },
       problems,
+      seen,
+      compare,
+      showSheet,
+      closeSheet,
+      saved: () => savedList,
       display: disp,
       frame: () => frame(performance.now()),
       // for tests: film from a fixed direction, without counting as the viewer moving the camera
