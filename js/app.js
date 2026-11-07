@@ -94,7 +94,7 @@ window.KinemaApp = {
     const tokens = {};
     function readTokens() {
       const cs = getComputedStyle(document.documentElement);
-      for (const k of ['--ink', '--muted', '--line', '--accent', '--left', '--right', '--ok', '--warn', '--bad', '--info', '--panel', '--sunk',
+      for (const k of ['--ink', '--muted', '--line', '--accent', '--left', '--right', '--ok', '--warn', '--bad', '--info', '--panel', '--sunk', '--stage-a',
         '--tr-com', '--tr-sh', '--tr-hip', '--tr-kn', '--tr-ft', '--tr-wr']) tokens[k] = cs.getPropertyValue(k).trim();
     }
     readTokens();
@@ -1247,7 +1247,7 @@ window.KinemaApp = {
         g.textAlign = 'right';
         g.fillText(`${t1.toFixed(1)}秒`, W - padR, H - 5);
         g.textAlign = 'center';
-        g.fillText('0°＝まっすぐ　大きいほど深く曲がっている', (padL + W - padR) / 2, H - 5);
+        if (W >= 480) g.fillText('0°＝まっすぐ　大きいほど深く曲がっている', (padL + W - padR) / 2, H - 5); // a phone has no room beside the time
       }
       // the target, dashed, for what is being looked at
       g.setLineDash([5, 4]);
@@ -2663,7 +2663,7 @@ window.KinemaApp = {
         g.textAlign = 'left';
         g.textBaseline = 'bottom';
         g.lineWidth = 3;
-        g.strokeStyle = '#fff';
+        g.strokeStyle = tokens['--stage-a'];
         const [tx, ty] = placeLabel(`この回 ${thisRep.angle}°`, X(tipX), Y(tipY), 5);
         g.strokeText(`この回 ${thisRep.angle}°`, tx, ty);
         g.fillStyle = tokens['--accent'];
@@ -2691,7 +2691,7 @@ window.KinemaApp = {
         }
         if (named.has(ev)) {
           g.lineWidth = 3;
-          g.strokeStyle = '#fff';
+          g.strokeStyle = tokens['--stage-a'];
           const [tx, ty] = placeLabel(ev.ja, X(x), Y(y));
           g.strokeText(ev.ja, tx, ty);
           g.fillStyle = tokens['--ink'];
@@ -2744,7 +2744,7 @@ window.KinemaApp = {
         g.textAlign = 'center';
         g.textBaseline = 'bottom';
         g.lineWidth = 4;
-        g.strokeStyle = '#fff';
+        g.strokeStyle = tokens['--stage-a'];
         g.strokeText(label, (x0 + x1) / 2, y - 8);
         g.fillStyle = tokens['--accent'];
         g.fillText(label, (x0 + x1) / 2, y - 8);

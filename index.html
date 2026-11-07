@@ -236,6 +236,7 @@
   .lib-import { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .ca { color: #1f6feb; font-weight: 700; }
   .cb { color: #c94a06; font-weight: 700; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ca { color: #6ea8ff; } :root:not([data-theme="light"]) .cb { color: #ff9a5c; } }
   .cmp-choose { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 10px; }
   .cmp-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 5px 8px; background: var(--panel); border: 1px solid var(--line); border-left-width: 5px; border-radius: 8px; }
   .cmp-pick.ca { border-left-color: #1f6feb; }
@@ -1027,8 +1028,8 @@
 <script src="js/atlas.js?v=5"></script>
 <script src="js/coach.js?v=3"></script>
 <script src="js/store.js?v=2"></script>
-<script src="js/compare.js?v=4"></script>
-<script src="js/app.js?v=51"></script>
+<script src="js/compare.js?v=5"></script>
+<script src="js/app.js?v=54"></script>
 <script type="importmap">
 {
   "imports": {

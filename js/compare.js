@@ -4,6 +4,8 @@
 window.createKinemaCompare = api => {
   const $ = s => document.querySelector(s), { esc } = api;
   const COLOR = { a: '#1f6feb', b: '#e8590c' };
+  // on the charts, whose background follows the page: brighter on a dark one
+  const chartColor = k => (matchMedia('(prefers-color-scheme: dark)').matches ? { a: '#6ea8ff', b: '#ff9a5c' } : COLOR)[k];
   const KEY_JA = { squat: '一番しゃがんだ瞬間', jump: '踏み切りの瞬間', broad: '踏み切りの瞬間' };
   const BONES = [[11, 12], [11, 23], [12, 24], [23, 24], [11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [27, 29], [29, 31], [27, 31], [24, 26], [26, 28], [28, 30], [30, 32], [28, 32]];
   const JOINTS = { kn: '膝', hip: '股関節', sh: '肩' };
@@ -188,7 +190,7 @@ window.createKinemaCompare = api => {
     return S;
   }
   function plotLine(g, pts, k) {
-    g.strokeStyle = COLOR[k];
+    g.strokeStyle = chartColor(k);
     g.lineWidth = 2.4;
     g.lineJoin = 'round';
     g.setLineDash(k === 'b' ? [7, 4] : []);
@@ -234,7 +236,7 @@ window.createKinemaCompare = api => {
     for (const [k, p] of [['a', A], ['b', B]]) {
       const v = jointAngle(p, indexAt(p, cmp.t), cmp.joint);
       if (!Number.isFinite(v)) continue;
-      g.fillStyle = COLOR[k];
+      g.fillStyle = chartColor(k);
       g.beginPath(); g.arc(X(cmp.t), Y(v), 4, 0, Math.PI * 2); g.fill();
     }
   }
@@ -278,8 +280,8 @@ window.createKinemaCompare = api => {
     for (const [c, p, pts] of [['a', A, pa], ['b', B, pb]]) {
       const q = pts[indexAt(p, cmp.t) - p.a];
       if (!q || !Number.isFinite(q[0]) || !Number.isFinite(q[1])) continue;
-      g.fillStyle = COLOR[c];
-      g.strokeStyle = '#fff';
+      g.fillStyle = chartColor(c);
+      g.strokeStyle = tk['--panel'];
       g.lineWidth = 1.5;
       g.beginPath(); g.arc(X(q[0]), Y(q[1]), 5, 0, Math.PI * 2); g.fill(); g.stroke();
     }
