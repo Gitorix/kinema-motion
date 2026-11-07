@@ -9,6 +9,9 @@ window.createKinemaCompare = api => {
   const KEY_JA = { squat: '一番しゃがんだ瞬間', jump: '踏み切りの瞬間', broad: '踏み切りの瞬間' };
   const BONES = [[11, 12], [11, 23], [12, 24], [23, 24], [11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [27, 29], [29, 31], [27, 31], [24, 26], [26, 28], [28, 30], [30, 32], [28, 32]];
   const JOINTS = { kn: '膝', hip: '股関節', sh: '肩' };
+  // a video analysed in general has no repetitions of a known movement: what can be picked is each movement found in it
+  const movementsOf = r => (r && r.general && r.quality ? (r.quality.bouts || []).filter(b => b.kind !== 'walk') : null);
+  const keyJa = p => (p.item.result && p.item.result.general ? (p.rep && p.rep.kind === 'swing' ? '手首が最も速い瞬間' : '動きの真ん中') : KEY_JA[p.item.move]);
 
   const view = $('#cmpCanvas'), side = { a: pickers('a'), b: pickers('b') };
   function pickers(k) {
@@ -22,10 +25,11 @@ window.createKinemaCompare = api => {
   function prepare(item, repIdx) {
     const r = item.result, F = item.frames, n = F.length, fps = item.fps;
     const reps = r && r.reps ? r.reps : [], segs = r && r.trajView && r.trajView.segments && r.trajView.segments.length ? r.trajView.segments : null;
-    const seg = segs ? segs[Math.min(repIdx, segs.length - 1)] : [0, n - 1];
-    const rep = reps[repIdx] || null;
+    const found = movementsOf(r), piece = found ? found[Math.min(repIdx, found.length - 1)] : null;
+    const seg = piece ? [piece.a, piece.b] : segs ? segs[Math.min(repIdx, segs.length - 1)] : [0, n - 1];
+    const rep = piece || reps[repIdx] || null;
     const flight = (r && r.flights || []).find(f => f.takeoff >= seg[0] && f.takeoff <= seg[1]);
-    let key = r && r.move === 'squat' && rep && Number.isInteger(rep.bottom) ? rep.bottom : flight ? flight.takeoff : Math.round((seg[0] + seg[1]) / 2);
+    let key = piece ? piece.peak : r && r.move === 'squat' && rep && Number.isInteger(rep.bottom) ? rep.bottom : flight ? flight.takeoff : Math.round((seg[0] + seg[1]) / 2);
     const pad = Math.round(0.4 * fps), a = Math.max(0, seg[0] - pad), b = Math.min(n - 1, seg[1] + pad);
     // the nearest frame with a pose stands in for the moment itself
     for (let d = 0; d < n && !(F[key] && F[key].ok); d++) { if (F[key + d] && F[key + d].ok) key += d; else if (F[key - d] && F[key - d].ok) key -= d; }
@@ -172,7 +176,7 @@ window.createKinemaCompare = api => {
     g.textAlign = 'left';
     g.textBaseline = 'top';
     g.fillStyle = '#fff';
-    g.fillText(Math.abs(cmp.t) < 0.02 ? `そろえた瞬間（${KEY_JA[side.a.prep.item.move]}）` : `${cmp.t > 0 ? '＋' : '－'}${Math.abs(cmp.t).toFixed(2)}秒`, 10, 8);
+    g.fillText(Math.abs(cmp.t) < 0.02 ? `そろえた瞬間（${keyJa(side.a.prep)}）` : `${cmp.t > 0 ? '＋' : '－'}${Math.abs(cmp.t).toFixed(2)}秒`, 10, 8);
   }
 
   // ---------- the charts ----------
@@ -304,8 +308,19 @@ window.createKinemaCompare = api => {
     ['hipAt', '股関節の曲げ', '°', 5, 0, d => `股関節を ${Math.abs(d)}° ${d > 0 ? '深く' : '浅く'}曲げています`],
     ['secs', '1回の時間', ' 秒', 0.2, 1, d => `1回に ${Math.abs(d).toFixed(1)} 秒${d > 0 ? '長く' : '短く'}かけています`],
   ];
+  const GENERAL_ROWS = [
+    ['secs', '動きの時間', ' 秒', 0.1, 2, d => `動きの時間が ${Math.abs(d).toFixed(2)} 秒${d > 0 ? '長い' : '短い'}です`],
+    ['wristPeak', '手の最高速（胴の長さ/秒）', '', 2, 1, d => `手の最高速が ${d > 0 ? '速い' : '遅い'}です`],
+    ['hipPeak', '腰の最高速（胴の長さ/秒）', '', 0.5, 1, d => `腰の動きが ${d > 0 ? '速い' : '遅い'}です`],
+    ['rkn', '膝の動く幅', '°', 8, 0, d => `膝の動く幅が ${Math.abs(d)}° ${d > 0 ? '大きい' : '小さい'}です`],
+    ['rhip', '股関節の動く幅', '°', 8, 0, d => `股関節の動く幅が ${Math.abs(d)}° ${d > 0 ? '大きい' : '小さい'}です`],
+    ['rsh', '肩の動く幅', '°', 8, 0, d => `肩の動く幅が ${Math.abs(d)}° ${d > 0 ? '大きい' : '小さい'}です`],
+    ['rel', '肘の動く幅', '°', 8, 0, d => `肘の動く幅が ${Math.abs(d)}° ${d > 0 ? '大きい' : '小さい'}です`],
+    ['trunk', '体幹の傾きの幅', '°', 5, 0, d => `体幹の傾きの幅が ${Math.abs(d)}° ${d > 0 ? '大きい' : '小さい'}です`],
+  ];
   function figuresOf(p) {
     const o = { ...(p.rep || {}) };
+    if (p.rep && p.rep.range) return { ...o, rkn: o.range.kn, rhip: o.range.hip, rsh: o.range.sh, rel: o.range.el };
     if (p.rep) o.secs = p.rep.t1 - p.rep.t0;
     o.hipAt = jointAngle(p, p.key, 'hip');
     return o;
@@ -314,7 +329,8 @@ window.createKinemaCompare = api => {
     const A = side.a.prep, B = side.b.prep, box = $('#cmpFigures'), say = $('#cmpSay');
     if (!A || !B) { box.innerHTML = ''; say.innerHTML = ''; return; }
     const squat = A.item.move === 'squat' && B.item.move === 'squat';
-    const rows = squat ? SQUAT_ROWS : JUMP_ROWS, fa = figuresOf(A), fb = figuresOf(B), found = [];
+    const anyGeneral = (A.item.result && A.item.result.general) || (B.item.result && B.item.result.general);
+    const rows = anyGeneral ? GENERAL_ROWS : squat ? SQUAT_ROWS : JUMP_ROWS, fa = figuresOf(A), fb = figuresOf(B), found = [];
     let compared = 0;
     const body = rows.map(([key, ja, unit, small, digits, words]) => {
       const a = fa[key], b = fb[key];
@@ -332,7 +348,7 @@ window.createKinemaCompare = api => {
     box.innerHTML = `<table><thead><tr><th></th><th class="ca">A</th><th class="cb">B</th><th>B−A</th></tr></thead><tbody>${body}</tbody></table>`;
     found.sort((x, y) => y.size - x.size);
     const notes = [];
-    if (A.item.move !== B.item.move) notes.push('違う種類の動きを比べています。');
+    if (!anyGeneral && A.item.move !== B.item.move) notes.push('違う種類の動きを比べています。');
     if (A.item !== B.item) notes.push('カメラの位置が違う動画どうしでは、長さの差がずれることがあります。');
     say.innerHTML = `${found.length ? `<p class="cmp-lead"><b>AとBの違い</b>（Aと比べたBの動き）</p><ul>${found.slice(0, 3).map(f => `<li>${esc(f.text)}</li>`).join('')}</ul>` : `<p class="cmp-lead">${compared ? '大きな違いは見られません。' : '比べられる数字がありません。図と線で比べてください。'}</p>`}${notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}`;
   }
@@ -400,10 +416,13 @@ window.createKinemaCompare = api => {
   // ---------- choosing ----------
   function fillReps(k) {
     const s = side[k], reps = s.item && s.item.result && s.item.result.reps ? s.item.result.reps : [];
-    s.rep.innerHTML = reps.length
+    const found = s.item ? movementsOf(s.item.result) : null;
+    s.rep.innerHTML = found && found.length
+      ? found.map((b, i) => `<option value="${i}">${i + 1}つ目（${esc(b.kindJa)}・${b.t0.toFixed(1)}秒）</option>`).join('')
+      : reps.length
       ? reps.map((r, i) => `<option value="${i}">${i + 1}回目${Number.isFinite(r.meters) ? `（${r.meters.toFixed(2)} m）` : ''}</option>`).join('')
       : '<option value="0">動画全体</option>';
-    s.rep.disabled = reps.length < 2;
+    s.rep.disabled = (found ? found.length : reps.length) < 2;
   }
   function applyChoice() {
     for (const k of ['a', 'b']) {
@@ -423,7 +442,7 @@ window.createKinemaCompare = api => {
     const hasVideo = !!(A.item.url || B.item.url);
     $('#cmpLayer').hidden = !hasVideo;
     $('#cmpMixWrap').hidden = !(A.item.url && B.item.url && cmp.layer === 'video');
-    $('#cmpKey').textContent = `${KEY_JA[A.item.move]}でそろえています`;
+    $('#cmpKey').textContent = `${keyJa(A)}でそろえています`;
     $('#cmpNoteA').textContent = A.item.url ? '' : 'Aは動画なし（骨格のみ）';
     $('#cmpNoteB').textContent = B.item.url ? '' : 'Bは動画なし（骨格のみ）';
     setTime(0);

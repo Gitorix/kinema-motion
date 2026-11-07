@@ -80,7 +80,7 @@ window.KinemaStore = (() => {
   const rounded = (values, digits) => Array.from(values, v => Number(v.toFixed(digits)));
   function toFile(meta, data) {
     return JSON.stringify({
-      kinema: FORMAT, name: meta.name, move: meta.move, fps: data.fps, vw: data.vw, vh: data.vh, duration: data.duration, total: data.total, analyzed: data.analyzed,
+      kinema: FORMAT, name: meta.name, move: meta.move, general: !!data.general, fps: data.fps, vw: data.vw, vh: data.vh, duration: data.duration, total: data.total, analyzed: data.analyzed,
       heightCm: data.heightCm || 0, weightKg: data.weightKg || 0,
       frames: data.frames.map(f => (f.ok ? { t: Number(f.t.toFixed(4)), img: rounded(f.img, 5), w: rounded(f.w, 5), vis: rounded(f.vis, 3) } : { t: Number(f.t.toFixed(4)) })),
     });
@@ -101,7 +101,7 @@ window.KinemaStore = (() => {
       return { t: f.t, ok: true, img: Float32Array.from(f.img), w: Float32Array.from(f.w), vis: Float32Array.from(f.vis) };
     });
     return {
-      name: String(o.name || '読み込んだ動画').slice(0, 120), move: o.move, fps: o.fps, vw: o.vw, vh: o.vh, frames,
+      name: String(o.name || '読み込んだ動画').slice(0, 120), move: o.move, general: o.general === true, fps: o.fps, vw: o.vw, vh: o.vh, frames,
       duration: num(o.duration, 0, 1e6) ? o.duration : frames[frames.length - 1].t, total: frames.length, analyzed: frames.length,
       heightCm: num(o.heightCm, 100, 230) ? o.heightCm : 0, weightKg: num(o.weightKg, 20, 200) ? o.weightKg : 0,
     };

@@ -250,7 +250,7 @@ window.KinemaApp = {
 
     // ---------- per-frame metrics ----------
     function resetData(source, name, fps, duration) {
-      Object.assign(state, { source, saved: false, name, fps, duration, total: 0, analyzed: 0, frames: [], events: [], idx: -1, clock: 0, result: null, autoMove: false, range: [0, Infinity] });
+      Object.assign(state, { source, saved: false, general: false, quality: null, name, fps, duration, total: 0, analyzed: 0, frames: [], events: [], idx: -1, clock: 0, result: null, autoMove: false, range: [0, Infinity] });
       state.rom = Object.fromEntries(ANGLES.map(a => [a.k, [Infinity, -Infinity]]));
       poseIdx = -1;
       repFocus = -1;
@@ -1548,7 +1548,7 @@ window.KinemaApp = {
       const ph = PHASES[m.phase], stage = stageAt(i);
       phaseEn.querySelector('span').textContent = stage || ph.ja;
       phaseEn.style.color = `var(${stage ? '--accent' : ph.color})`;
-      phaseJa.textContent = state.analyzing && !moveChosen ? '動きの種類は解析の最後に判定します' : window.KinemaAnalysis.MOVES[state.move].ja;
+      phaseJa.textContent = state.general ? '全般の分析' : state.analyzing && !moveChosen ? '動きの種類は解析の最後に判定します' : window.KinemaAnalysis.MOVES[state.move].ja;
       repsEl.textContent = repsAt(f.t, m);
     }
     function setIndex(i, jump = false) {
@@ -1773,7 +1773,7 @@ window.KinemaApp = {
         }
       }
       Object.assign(s, {
-        url: currentUrl, file: currentFile, savedId: currentSaved, name: state.name, fps: state.fps, duration: state.duration, total: state.total, analyzed: state.analyzed, vw: state.vw, vh: state.vh,
+        url: currentUrl, file: currentFile, savedId: currentSaved, general: !!state.general, name: state.name, fps: state.fps, duration: state.duration, total: state.total, analyzed: state.analyzed, vw: state.vw, vh: state.vh,
         frames: state.frames, events: state.events, rom: state.rom, range: state.range, move: state.move, summary: '',
       });
       currentSession = s;
@@ -1818,7 +1818,7 @@ window.KinemaApp = {
       }
       if (run !== state.runId) return;
       Object.assign(state, {
-        source: 'video', name: s.name, fps: s.fps, duration: s.duration, total: s.total, analyzed: s.analyzed, vw: s.vw, vh: s.vh,
+        source: 'video', saved: false, general: !!s.general, name: s.name, fps: s.fps, duration: s.duration, total: s.total, analyzed: s.analyzed, vw: s.vw, vh: s.vh,
         frames: s.frames, events: s.events, rom: s.rom, range: s.range, move: s.move, idx: -1, clock: 0, result: null, analyzing: false, autoMove: false,
       });
       currentSession = s;
@@ -1849,7 +1849,8 @@ window.KinemaApp = {
       if (!found) return;
       setPlaying(!matchMedia('(prefers-reduced-motion: reduce)').matches);
       const r = state.result;
-      if (r && r.error) toast('動きを見つけられませんでした。「動作の分析」の欄に、次に試せることを表示しています。');
+      if (r && r.general) toast(`種目を問わない「全般の分析」で、動きの質を測りました${state.autoMove ? '（スクワット・ジャンプ・立ち幅跳びには当てはまらないと判定）' : ''}。`);
+      else if (r && r.error) toast('動きを見つけられませんでした。「動作の分析」の欄に、次に試せることを表示しています。');
       else if (r) toast(`${partial ? '途中までの動画で' : ''}${state.autoMove ? `動画の動きから「${window.KinemaAnalysis.MOVES[r.move].ja}」と判定して分析しました（${r.reps.length}回）。` : `分析しました：${window.KinemaAnalysis.MOVES[r.move].ja}（${r.reps.length}回）。`}結果は「動作の分析」「軌跡」「筋肉の出力」で見られます。`);
     }
     // What the video shows decides the movement, unless the viewer picked one while it was being analysed: "スクワット"
@@ -1857,7 +1858,17 @@ window.KinemaApp = {
     function chooseMoveFromVideo() {
       state.autoMove = false;
       if (moveChosen) return;
-      const found = guard(() => window.KinemaAnalysis.detect(state.frames.slice(0, state.analyzed), state.vw, state.vh));
+      const F = state.frames.slice(0, state.analyzed);
+      const found = guard(() => window.KinemaAnalysis.detect(F, state.vw, state.vh));
+      // not one of the movements KINEMA can judge: say what was measured, and judge nothing
+      const fits = !!found && guard(() => !window.KinemaAnalysis.analyze(found.move, F, state.vw, state.vh, {}).error);
+      const Q = guard(() => window.KinemaQuality.analyze(F, state.vw, state.vh, state.fps));
+      if (Q && !Q.error && window.KinemaQuality.notOneOfThree(Q, found, fits)) {
+        state.general = true;
+        state.autoMove = true;
+        syncMoveButtons();
+        return;
+      }
       if (!found) return;
       state.autoMove = true; // said on the page even when it stays the same: what was analysed must never be left unsaid
       if (found.move === state.move) return;
@@ -2054,19 +2065,21 @@ window.KinemaApp = {
     }
 
     // ---------- movement choice ----------
-    const moveBtns = [...document.querySelectorAll('#moves button')];
+    const moveBtns = [...document.querySelectorAll('#moves button[data-move]')], generalBtn = $('#generalBtn');
     function syncMoveButtons() {
-      for (const b of moveBtns) b.setAttribute('aria-pressed', String(b.dataset.move === state.move));
+      for (const b of moveBtns) b.setAttribute('aria-pressed', String(!state.general && b.dataset.move === state.move));
+      generalBtn.setAttribute('aria-pressed', String(!!state.general));
       const info = window.KinemaAnalysis.MOVES[state.move];
-      metaMove.textContent = info.ja;
+      metaMove.textContent = state.general ? '全般の分析' : info.ja;
       $('#tips').innerHTML = [...info.tips, 'スロー撮影ではなく普通の動画で撮る（時間の長さから高さや距離を計算するため）'].map(t => `<li>${esc(t)}</li>`).join('');
       repsLabel.textContent = state.move === 'squat' ? '回数' : '跳んだ回数';
     }
     for (const b of moveBtns) {
       b.addEventListener('click', () => {
-        const changed = state.move !== b.dataset.move;
+        const changed = state.move !== b.dataset.move || !!state.general;
         if (changed) trajUi.points = new Set(TRAJ_DEFAULT[b.dataset.move]);
         state.move = b.dataset.move;
+        state.general = false;
         state.autoMove = false;
         syncMoveButtons();
         if (state.analyzing) { // the running analysis picks up the new choice when it finishes
@@ -2081,6 +2094,18 @@ window.KinemaApp = {
         }
       });
     }
+
+    generalBtn.addEventListener('click', () => {
+      state.general = true;
+      state.autoMove = false;
+      syncMoveButtons();
+      if (state.analyzing) { moveChosen = true; return; }
+      if (state.analyzed) {
+        runAnalysis();
+        showFrame(state.idx, true);
+        toast('種目を問わない「全般の分析」に切り替えました。');
+      }
+    });
 
     // ---------- advice ----------
     const adviceEl = $('#advice');
@@ -2099,13 +2124,21 @@ window.KinemaApp = {
       const [a, b] = rangeNow();
       return F.map((f, i) => (i >= a && i <= b ? f : { t: f.t, ok: false, w: null, img: null, vis: null, m: { ok: false, ang: null, vis: null } }));
     }
+    // The general analysis keeps the paths and the floor, and everything that judges a movement is left out: the
+    // muscle output and the advice assume a squat or a jump. `error` is what the parts that need a movement look at.
+    function asGeneral(base, quality, n) {
+      return { ...base, general: true, quality, checks: [], trajChecks: [], kinChecks: [], kin: null, reps: [], flights: [], phases: [], skipped: 0,
+        trajView: { i0: 0, i1: Math.max(0, n - 1), segments: [], events: [] }, error: '全般の分析では、種目としての評価はしていません。' };
+    }
     // Each part runs on its own: a failure in one still leaves the others on screen.
     function runAnalysis() {
       if (!state.analyzed) return;
       repFocus = -1; // the repetitions may come out differently
       updateRangeUi();
+      state.quality = guard(() => window.KinemaQuality.analyze(framesInRange(), state.vw, state.vh, state.fps)) || null;
       try {
         state.result = window.KinemaAnalysis.analyze(state.move, framesInRange(), state.vw, state.vh, { heightCm: userHeight(), weightKg: userWeight() });
+        state.result = state.general ? asGeneral(state.result, state.quality, state.analyzed) : { ...state.result, quality: state.quality };
       } catch (err) {
         reportProblem(err);
         state.result = {
@@ -2124,8 +2157,8 @@ window.KinemaApp = {
       if (currentSession) {
         const r = state.result, n = s => r.checks.filter(c => c.status === s).length;
         Object.assign(currentSession, {
-          move: state.move, range: state.range,
-          summary: `${window.KinemaAnalysis.MOVES[state.move].ja}・${r.error ? '動きが見つからない' : `${r.reps.length}回・改善${n('bad')} 注意${n('warn')}`}`,
+          move: state.move, range: state.range, general: !!state.general,
+          summary: r.general ? `全般の分析・動きの区切り ${(r.quality && r.quality.bouts || []).length}か所` : `${window.KinemaAnalysis.MOVES[state.move].ja}・${r.error ? '動きが見つからない' : `${r.reps.length}回・改善${n('bad')} 注意${n('warn')}`}`,
         });
       }
       renderSessions();
@@ -2144,6 +2177,7 @@ window.KinemaApp = {
         <p class="adv-err">${esc(r.error)}</p>
         ${others.length ? `<p class="adv-try">この動画は、別の動きとして分析できそうです：</p>
           <div class="adv-tryb">${others.map(m => `<button type="button" class="btn small" data-move="${m}">${esc(window.KinemaAnalysis.MOVES[m].ja)}として分析する</button>`).join('')}</div>` : ''}
+        <div class="adv-tryb"><button type="button" class="btn small" id="toGeneral">全般の分析に切り替える</button></div>
         <ul class="adv-tips">
           ${rate < 0.8 ? `<li>人物を検出できたコマは ${Math.round(rate * 100)}% でした。全身が明るく映るように撮ると、検出しやすくなります。</li>` : ''}
           ${r.skipped ? `<li>${r.move === 'squat' ? `膝が曲がる動きが ${r.skipped} か所ありましたが、足が動いている（歩いているなど）か腰が下がっていないため、スクワットには数えていません。` : `両足が床から離れて見える場面が ${r.skipped} か所ありましたが、跳ぶ前に両膝が曲がって腰が沈む動きがないため、ジャンプには数えていません。`}</li>` : ''}
@@ -2151,6 +2185,7 @@ window.KinemaApp = {
           <li>動いていない部分が長いときは、画面下の「ここから」「ここまで」で動いている部分だけを選ぶと、見つかることがあります。</li>
         </ul>`;
       adviceEl.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => moveBtns.find(x => x.dataset.move === b.dataset.move).click()));
+      $('#toGeneral').addEventListener('click', () => generalBtn.click());
     }
     const chipList = (ids, role) => ids.map(id => `<button type="button" class="mchip ${role}" data-id="${id}">${esc(MUSCLE[id] ? MUSCLE[id].ja : id)}</button>`).join('');
     const list = items => `<ul>${items.map(s => `<li>${esc(s)}</li>`).join('')}</ul>`;
@@ -2250,9 +2285,55 @@ window.KinemaApp = {
       showMusclesNow();
       markLists();
     }
+    // the six measures, in any movement
+    const Q_MARK = { good: ['ok', '良い'], mid: ['warn', '差あり'], warn: ['bad', '注意'], info: ['info', '計測'], none: ['', '評価なし'] };
+    function qualityHtml(Q) {
+      if (!Q || !Q.items) return '';
+      return `<div class="q-items">${Object.values(Q.items).map(it => {
+        const [cls, ja] = Q_MARK[it.status] || Q_MARK.info;
+        return `<section class="q-item${it.status === 'none' ? ' off' : ''}">
+          <h4>${esc(it.ja)} <span class="chip ${cls}">${ja}</span></h4>
+          <p class="q-value">${esc(it.status === 'none' ? it.detail : it.value)}</p>
+          ${(it.rows || []).length ? `<dl class="q-rows">${it.rows.map(row => `<div><dt>${esc(row.ja)}</dt><dd>${esc(row.text)}${row.note ? `<small>${esc(row.note)}</small>` : ''}</dd></div>`).join('')}</dl>` : ''}
+          ${it.status === 'none' ? '' : `<p class="q-note">${esc(it.detail)}</p>`}
+          ${Number.isInteger(it.at) ? `<button type="button" class="btn small" data-at="${it.at}">その場面を見る</button>` : ''}
+        </section>`;
+      }).join('')}</div>`;
+    }
+    const wireQuality = host => host.querySelectorAll('[data-at]').forEach(b => b.addEventListener('click', () => { setPlaying(false); seekIndex(Number(b.dataset.at)); }));
+    function renderGeneral(r) {
+      const Q = r.quality, VIEW = { side: '横から撮影', front: '正面から撮影', oblique: '斜めから撮影' };
+      const body = window.KINEMA_BODY, rate = detectionRate();
+      if (!Q || Q.error) {
+        adviceEl.innerHTML = `<p class="adv-err">${esc(Q && Q.error || '動きの質を分析できませんでした。')}</p>`;
+        return;
+      }
+      const others = otherMoves(), T = Q.type, moving = Q.bouts.filter(b => b.kind !== 'walk');
+      adviceEl.innerHTML = `
+        <p class="adv-meta">全般の分析 ・ ${VIEW[Q.view] || ''} ・ 動きの区切り ${Q.bouts.length}か所${state.source === 'demo' && !state.saved ? ' ・ サンプル' : ''}</p>
+        ${state.autoMove ? '<p class="adv-auto">スクワット・ジャンプ・立ち幅跳びには当てはまらないと判定し、測れることだけを示しています。</p>' : ''}
+        <p class="adv-warn">種目としての良し悪しは評価していません。比べるときは、本人の別の回や保存した動画と見比べてください。</p>
+        ${rate < 0.85 ? `<p class="adv-warn">人物を検出できたのは ${Math.round(rate * 100)}% のコマです。結果がずれている可能性があります。</p>` : ''}
+        <p class="q-type"><b>動きの型</b>${T.id === 'unknown' ? ' 判定できませんでした' : ` ${esc(T.ja)}${T.sure ? '' : '（候補）'}`}${T.others.length ? `<small>ほかに：${T.others.map(esc).join('、')}</small>` : ''}</p>
+        ${others.length ? `<div class="adv-tryb">${others.map(m => `<button type="button" class="btn small" data-move="${m}">${esc(window.KinemaAnalysis.MOVES[m].ja)}として分析する</button>`).join('')}</div>` : ''}
+        <h3 class="flow-h">動きの質（種目を問わない6項目）</h3>
+        ${qualityHtml(Q)}
+        ${moving.length ? `<details class="q-bouts"><summary>見つかった動き（${moving.length}か所）</summary><ol>${moving.map(b => `<li><button type="button" class="btn small" data-at="${b.a}">${b.t0.toFixed(1)}秒</button> ${esc(b.kindJa)}（${b.secs.toFixed(1)}秒）</li>`).join('')}</ol></details>` : ''}
+        <p class="adv-note">${esc(body ? body.TRUNK.video.rule : '')} 動きの判定と各項目の目安は、まだ多くの実際の動画では検証していません。</p>`;
+      adviceEl.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => moveBtns.find(x => x.dataset.move === b.dataset.move).click()));
+      wireQuality(adviceEl);
+    }
     function renderAdvice() {
       const r = state.result;
       if (!r) return;
+      if (r.general) {
+        finding = null;
+        focusLink = null;
+        for (const id of ['#seeAngle', '#seeTraj', '#seeKin']) setSee(id, '');
+        renderGeneral(r);
+        showMusclesNow();
+        return;
+      }
       if (r.error) {
         finding = null;
         focusLink = null;
@@ -2278,7 +2359,9 @@ window.KinemaApp = {
         <h3 class="flow-h">② 原因 → プロセス → 向上</h3>
         <div class="chain" id="chain"></div>
         <details class="plan-wrap"><summary>③ 全体のまとめ：パフォーマンス向上プラン</summary>${planHtml(r)}</details>
+        <details class="plan-wrap"><summary>動きの質（種目を問わない6項目）</summary>${qualityHtml(state.quality)}</details>
         <p class="adv-note">動画の動きから推定した結果です。筋力を直接測ったものではなく、医学的な診断でもありません。痛みがある場合は医師や理学療法士に相談してください。</p>`;
+      wireQuality(adviceEl);
       adviceEl.querySelectorAll('.frow').forEach(b => b.addEventListener('click', () => selectFinding(b.dataset.id, true)));
       adviceEl.querySelectorAll('.plan .mchip').forEach(b => b.addEventListener('click', () => toggleSelect(b.dataset.id)));
       const keep = all.find(c => c.id === finding) || problems[0] || all[0];
@@ -2443,7 +2526,7 @@ window.KinemaApp = {
         trajHintsEl.innerHTML = checkCards(hints);
         wireChecks(trajHintsEl, hints);
       } else {
-        trajHintsEl.innerHTML = `<p class="empty">${r && r.error ? '動きを見つけられなかったため、軌跡からわかることはありません。' : '解析が終わると、ここに表示されます。'}</p>`;
+        trajHintsEl.innerHTML = `<p class="empty">${r && r.general ? '全般の分析では、軌跡から良し悪しは判定しません。線の形を回どうしで見比べてください。' : r && r.error ? '動きを見つけられなかったため、軌跡からわかることはありません。' : '解析が終わると、ここに表示されます。'}</p>`;
       }
       trajPlotDirty = true;
     }
@@ -2852,7 +2935,7 @@ window.KinemaApp = {
       kinLegendEl.textContent = '山が高いほど強い力です。0より上は関節を伸ばす向き、下は曲げる向きです。空中は床を押せないので0になります。縦の線がいまの場面で、クリックするとその場面へ移動します。';
       if (!K || !Object.keys(K.summary).length) {
         kinPhasesEl.innerHTML = '';
-        kinJointsEl.innerHTML = `<p class="empty">${r && r.error ? '動きを見つけられなかったため、出力は計算できません。' : '解析が終わると、ここに表示されます。'}</p>`;
+        kinJointsEl.innerHTML = `<p class="empty">${r && r.general ? '全般の分析では、筋肉の出力は計算しません。今の計算は、跳ぶ動作としゃがむ動作を前提にしているためです。' : r && r.error ? '動きを見つけられなかったため、出力は計算できません。' : '解析が終わると、ここに表示されます。'}</p>`;
         $('#kinMini').innerHTML = '';
         kinMusclesEl.innerHTML = '';
         kinHintsEl.innerHTML = '';
@@ -2914,7 +2997,7 @@ window.KinemaApp = {
         g.font = '12px "Zen Kaku Gothic New", sans-serif';
         g.textAlign = 'center';
         g.textBaseline = 'middle';
-        g.fillText(state.analyzing ? '解析が終わると表示されます' : '出力のデータはまだありません', W / 2, H / 2);
+        g.fillText(state.analyzing ? '解析が終わると表示されます' : state.general ? '全般の分析では計算しません' : '出力のデータはまだありません', W / 2, H / 2);
         return;
       }
       // the repetition in view may have changed: the figures above follow it
@@ -3627,18 +3710,19 @@ window.KinemaApp = {
       try { savedList = await Store.list(); } catch (err) { savedList = []; reportProblem(err); }
       $('#libCount').textContent = savedList.length ? String(savedList.length) : '';
     }
-    const figuresLine = rec => [moveJa(rec.move), rec.reps ? `${rec.reps}回` : '', Number.isFinite(rec.best) ? `最長 ${rec.best.toFixed(2)} m` : ''].filter(Boolean).join('・');
+    const figuresLine = rec => [rec.general ? '全般の分析' : moveJa(rec.move), rec.general ? `動き${rec.reps}か所` : rec.reps ? `${rec.reps}回` : '', Number.isFinite(rec.best) ? `最長 ${rec.best.toFixed(2)} m` : ''].filter(Boolean).join('・');
     const newId = () => `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
     const metaOf = (id, name, move, r, hasVideo, sizeMB) => {
       const dist = (r && r.reps || []).map(x => x.meters).filter(Number.isFinite);
-      return { id, name, move, savedAt: Date.now(), reps: r && r.reps ? r.reps.length : 0, best: dist.length ? Math.max(...dist) : null, hasVideo, sizeMB };
+      const general = !!(r && r.general);
+      return { id, name, move, general, savedAt: Date.now(), reps: general ? (r.quality && r.quality.bouts || []).filter(b => b.kind !== 'walk').length : r && r.reps ? r.reps.length : 0, best: dist.length ? Math.max(...dist) : null, hasVideo, sizeMB };
     };
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = '保存中…';
       const id = newId(), file = currentFile;
       const meta = metaOf(id, state.name, state.move, state.result, !!file, file ? file.size / 1048576 : 0);
-      const data = { id, fps: state.fps, vw: state.vw, vh: state.vh, duration: state.duration, total: state.total, analyzed: state.analyzed, frames: bareFrames(state.frames.slice(0, state.analyzed)), heightCm: userHeight(), weightKg: userWeight(), video: file || null };
+      const data = { id, general: !!state.general, fps: state.fps, vw: state.vw, vh: state.vh, duration: state.duration, total: state.total, analyzed: state.analyzed, frames: bareFrames(state.frames.slice(0, state.analyzed)), heightCm: userHeight(), weightKg: userWeight(), video: file || null };
       try {
         const done = await Store.save(meta, data);
         currentSaved = id;
@@ -3707,7 +3791,8 @@ window.KinemaApp = {
         const frames = rec.frames;
         const copy = { frames: frames.map(f => ({ ...f })), fps: rec.fps, vw: rec.vw, vh: rec.vh };
         hydrate(copy);
-        const r = window.KinemaAnalysis.analyze(rec.move, copy.frames, rec.vw, rec.vh, { heightCm: rec.heightCm, weightKg: rec.weightKg });
+        let r = window.KinemaAnalysis.analyze(rec.move, copy.frames, rec.vw, rec.vh, { heightCm: rec.heightCm, weightKg: rec.weightKg });
+        if (rec.general) r = asGeneral(r, window.KinemaQuality.analyze(copy.frames, rec.vw, rec.vh, rec.fps), copy.frames.length);
         await Store.save(metaOf(id, rec.name, rec.move, r, false, 0), { ...rec, id, video: null });
         await refreshSaved();
         renderLibrary();
@@ -3741,7 +3826,7 @@ window.KinemaApp = {
       currentFile = data.video || null;
       currentSaved = id;
       resetData(url ? 'video' : 'demo', rec.name, data.fps, data.duration);
-      Object.assign(state, { saved: !url, vw: data.vw, vh: data.vh, total: data.total, move: rec.move });
+      Object.assign(state, { saved: !url, general: !!data.general, vw: data.vw, vh: data.vh, total: data.total, move: rec.move });
       if (data.heightCm) heightIn.value = String(data.heightCm);
       if (data.weightKg) weightIn.value = String(data.weightKg);
       footLevel = null;
@@ -3785,7 +3870,8 @@ window.KinemaApp = {
         const data = await Store.get(id), rec = savedList.find(x => x.id === id);
         if (!data || !rec) throw new Error('saved video missing');
         hydrate(data);
-        const result = window.KinemaAnalysis.analyze(rec.move, data.frames, data.vw, data.vh, { heightCm: data.heightCm || 0, weightKg: data.weightKg || 0 });
+        let result = window.KinemaAnalysis.analyze(rec.move, data.frames, data.vw, data.vh, { heightCm: data.heightCm || 0, weightKg: data.weightKg || 0 });
+        if (data.general) result = asGeneral(result, window.KinemaQuality.analyze(data.frames, data.vw, data.vh, data.fps), data.frames.length);
         return { label: rec.name, move: rec.move, fps: data.fps, vw: data.vw, vh: data.vh, frames: data.frames, result, url: data.video ? URL.createObjectURL(data.video) : null, ownUrl: !!data.video };
       },
     });
