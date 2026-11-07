@@ -220,6 +220,14 @@
   #seekBar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   #rangeToggle { display: none; }
   /* the general analysis */
+  .gen-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 12.5px; }
+  .gen-table th, .gen-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .gen-table thead th { color: var(--muted); font-size: 11px; }
+  .gen-table tbody th { font-weight: 700; }
+  .gen-table td:last-child, .gen-table thead th:last-child { text-align: right; }
+  .mchips.assist { margin-top: 3px; align-items: center; }
+  .mchips.assist small { color: var(--muted); font-size: 11px; }
+  .mchip.plain { cursor: default; }
   .q-type { margin: 6px 0; font-size: 13px; }
   .q-type small { display: block; font-size: 11px; color: var(--muted); }
   .q-items { display: grid; gap: 6px; margin-top: 4px; }
@@ -1040,16 +1048,17 @@
 <script src="js/trajectory.js?v=10"></script>
 <script src="js/kinetics.js?v=11"></script>
 <script src="js/demo.js?v=5"></script>
-<script src="js/analysis.js?v=22"></script>
+<script src="js/analysis.js?v=23"></script>
 <script src="js/figure.js?v=7"></script>
 <script src="js/anatomy-data.js?v=1"></script>
 <script src="js/atlas.js?v=5"></script>
 <script src="js/coach.js?v=3"></script>
 <script src="js/body-knowledge.js?v=1"></script>
-<script src="js/quality.js?v=3"></script>
+<script src="js/quality.js?v=4"></script>
+<script src="js/output.js?v=2"></script>
 <script src="js/store.js?v=3"></script>
 <script src="js/compare.js?v=6"></script>
-<script src="js/app.js?v=56"></script>
+<script src="js/app.js?v=59"></script>
 <script type="importmap">
 {
   "imports": {

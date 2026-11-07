@@ -984,7 +984,9 @@ window.KinemaAnalysis = (() => {
     const fn = { squat: analyzeSquat, jump: analyzeJump, broad: analyzeBroad }[move];
     const out = fn(c);
     out.weightKg = opts.weightKg > 0 ? opts.weightKg : null;
-    const kin = window.KinemaKinetics && !out.error ? c.attempt(() => window.KinemaKinetics.compute(c, out, move), null) : null;
+    // the general analysis names its own stretches of movement and wants the push on the floor for those
+    const kin = window.KinemaKinetics && opts.generalPhases ? c.attempt(() => window.KinemaKinetics.compute(c, { phases: opts.generalPhases, flights: [], reps: [], checks: [], weightKg: out.weightKg }, move), null)
+      : window.KinemaKinetics && !out.error ? c.attempt(() => window.KinemaKinetics.compute(c, out, move), null) : null;
     return { move, view: c.view, side: c.side, ground: c.ground, traj: c.traj, trajChecks: [], flights: [], kin, kinChecks: kin ? kin.checks : [], problems, ...out, trajView: out.trajView || all };
   }
 

@@ -1456,6 +1456,7 @@ window.KinemaApp = {
         drawSpark();
         highlightLog(f.t);
       }
+      followGeneral();
       metaTime.textContent = fmtTime(f.t);
       metaFrame.textContent = `${i + 1} / ${state.total}`;
       seekBar.max = String(Math.max(0, state.analyzed - 1));
@@ -1499,6 +1500,7 @@ window.KinemaApp = {
     }
     function repsAt(t, m) {
       if (state.analyzing) return '—'; // the movement and its repetitions are decided when the analysis ends
+      if (state.result && state.result.general) return (state.result.quality && state.result.quality.bouts || []).filter(b => b.kind !== 'walk' && b.t1 <= t + 1e-6).length;
       if (state.result && state.result.reps) return state.result.reps.filter(r => r.t1 <= t + 1e-6).length;
       return state.move === 'squat' ? m.reps : 0;
     }
@@ -1529,6 +1531,7 @@ window.KinemaApp = {
         const d = Math.abs(m.ang[s.l] - m.ang[s.r]);
         s.val.textContent = `${Math.round(d)}°`;
         if (d < 10) setChip(s.chip, 'ok', 'そろっている');
+        else if (state.general) setChip(s.chip, '', '差あり'); // one hand swinging: a difference is not a fault
         else if (d < 20) setChip(s.chip, 'warn', 'やや差あり');
         else setChip(s.chip, 'bad', '差が大きい');
       }
@@ -1831,6 +1834,7 @@ window.KinemaApp = {
       clearTrails();
       guard(updateLevel);
       trajUi.points = new Set(TRAJ_DEFAULT[s.move]);
+      if (s.general) showGeneralViews();
       syncMoveButtons();
       metaSource.textContent = s.name;
       pipTag.textContent = '元の動画';
@@ -1866,6 +1870,7 @@ window.KinemaApp = {
       if (Q && !Q.error && window.KinemaQuality.notOneOfThree(Q, found, fits)) {
         state.general = true;
         state.autoMove = true;
+        showGeneralViews();
         syncMoveButtons();
         return;
       }
@@ -2072,7 +2077,7 @@ window.KinemaApp = {
       const info = window.KinemaAnalysis.MOVES[state.move];
       metaMove.textContent = state.general ? '全般の分析' : info.ja;
       $('#tips').innerHTML = [...info.tips, 'スロー撮影ではなく普通の動画で撮る（時間の長さから高さや距離を計算するため）'].map(t => `<li>${esc(t)}</li>`).join('');
-      repsLabel.textContent = state.move === 'squat' ? '回数' : '跳んだ回数';
+      repsLabel.textContent = state.general ? '動きの回数' : state.move === 'squat' ? '回数' : '跳んだ回数';
     }
     for (const b of moveBtns) {
       b.addEventListener('click', () => {
@@ -2098,6 +2103,7 @@ window.KinemaApp = {
     generalBtn.addEventListener('click', () => {
       state.general = true;
       state.autoMove = false;
+      showGeneralViews();
       syncMoveButtons();
       if (state.analyzing) { moveChosen = true; return; }
       if (state.analyzed) {
@@ -2126,9 +2132,20 @@ window.KinemaApp = {
     }
     // The general analysis keeps the paths and the floor, and everything that judges a movement is left out: the
     // muscle output and the advice assume a squat or a jump. `error` is what the parts that need a movement look at.
-    function asGeneral(base, quality, n) {
-      return { ...base, general: true, quality, checks: [], trajChecks: [], kinChecks: [], kin: null, reps: [], flights: [], phases: [], skipped: 0,
-        trajView: { i0: 0, i1: Math.max(0, n - 1), segments: [], events: [] }, error: '全般の分析では、種目としての評価はしていません。' };
+    function asGeneral(base, quality, F, fps) {
+      const moving = quality && quality.bouts ? quality.bouts.filter(b => b.kind !== 'walk') : [];
+      const output = guard(() => window.KinemaOutput.compute(F, quality, fps, base.kin)) || null;
+      return { ...base, general: true, quality, output, checks: [], trajChecks: [], kinChecks: [], kin: null, reps: [], flights: [], phases: [], skipped: 0,
+        trajView: { i0: 0, i1: Math.max(0, F.length - 1), segments: moving.map(b => [b.a, b.b]), perRep: moving.length > 0, events: moving.map(b => ({ i: b.peak, ja: b.kind === 'swing' ? '手首が最速' : '動きの中心' })) },
+        error: '全般の分析では、種目としての評価はしていません。' };
+    }
+    const generalPhases = Q => (Q && Q.bouts ? Q.bouts.filter(b => b.kind !== 'walk').map(b => ({ kind: 'con', i0: b.a, i1: b.b })) : []);
+    // what a swing is about: the hands' paths, and the arms on the angle chart
+    function showGeneralViews() {
+      trajUi.points = new Set(['com', 'wr']);
+      for (const g of Object.keys(chart.groups)) chart.groups[g] = true;
+      document.querySelectorAll('#legend button').forEach(b => b.setAttribute('aria-pressed', String(!!chart.groups[b.dataset.g])));
+      chart.dirty = true;
     }
     // Each part runs on its own: a failure in one still leaves the others on screen.
     function runAnalysis() {
@@ -2137,8 +2154,9 @@ window.KinemaApp = {
       updateRangeUi();
       state.quality = guard(() => window.KinemaQuality.analyze(framesInRange(), state.vw, state.vh, state.fps)) || null;
       try {
-        state.result = window.KinemaAnalysis.analyze(state.move, framesInRange(), state.vw, state.vh, { heightCm: userHeight(), weightKg: userWeight() });
-        state.result = state.general ? asGeneral(state.result, state.quality, state.analyzed) : { ...state.result, quality: state.quality };
+        const F = framesInRange();
+        state.result = window.KinemaAnalysis.analyze(state.move, F, state.vw, state.vh, { heightCm: userHeight(), weightKg: userWeight(), ...(state.general ? { generalPhases: generalPhases(state.quality) } : {}) });
+        state.result = state.general ? asGeneral(state.result, state.quality, F, state.fps) : { ...state.result, quality: state.quality };
       } catch (err) {
         reportProblem(err);
         state.result = {
@@ -2222,10 +2240,22 @@ window.KinemaApp = {
       el.innerHTML = text ? `<b>見る所</b>${esc(text)}` : '';
     };
     // the muscles on the figure: all that this movement uses, by their part in it, or those of the finding picked
+    let generalSeg = -2;
+    // the movement in view changed: its muscles and its figures
+    function followGeneral() {
+      const r = state.result;
+      if (!r || !r.general || !segments() || segNow() === generalSeg) return;
+      showMusclesNow();
+      renderKin();
+    }
     function showMusclesNow() {
       const r = state.result, map = {};
       let quiet = true;
-      if (ui.show === 'roles' && r && !r.error) {
+      if (ui.show === 'roles' && r && r.general) {
+        const out = r.output, j = segments() ? segNow() : -1;
+        Object.assign(map, out && j >= 0 ? window.KinemaOutput.musclesOf(out.bouts[j]) : {});
+        generalSeg = j;
+      } else if (ui.show === 'roles' && r && !r.error) {
         const own = findingByViewer && focusLink ? focusLink.muscles : null;
         const has = own && Object.values(own).some(list => list.length);
         const set = has ? own : window.KinemaKinetics.ROLES[r.move];
@@ -2553,6 +2583,7 @@ window.KinemaApp = {
         g.fillText(text, W / 2, H / 2);
       };
       const r = state.result, T = r && r.traj;
+      const moveNow = r && r.general ? 'general' : r && r.move; // the general analysis judges nothing: no ideal line, no take-off line
       if (!T || !r.trajView || T.n !== state.analyzed) { message(state.analyzing ? '解析が終わると、ここに軌跡が表示されます' : '軌跡はまだありません'); return; }
       if ((segments() ? segNow() : -1) !== trajSeg) renderTrajStats();
       // Repetitions are drawn one at a time, the others faintly behind it, all from the same place: the middle of the
@@ -2584,7 +2615,7 @@ window.KinemaApp = {
       // same scale across and up, floor at the bottom
       const padL = narrow ? 30 : 46, padR = narrow ? 8 : 14, padT = 14, padB = narrow ? 32 : 36;
       // room above for the arrow of this jump's angle and its label
-      const rep0 = r.reps && r.reps[cur], leave0 = r.move === 'broad' && rep0 && Number.isFinite(rep0.angle) ? r.trajView.events.find(e => e.ja === '踏み切り' && e.i >= segs[cur][0] && e.i <= segs[cur][1]) : null;
+      const rep0 = r.reps && r.reps[cur], leave0 = moveNow === 'broad' && rep0 && Number.isFinite(rep0.angle) ? r.trajView.events.find(e => e.ja === '踏み切り' && e.i >= segs[cur][0] && e.i <= segs[cur][1]) : null;
       if (leave0 && Number.isFinite(T.m.com.y[leave0.i - 1])) y1 = Math.max(y1, T.m.com.y[leave0.i - 1] - shift[cur][1] + 0.55 * Math.sin(rep0.angle * Math.PI / 180) + 0.1);
       const k = Math.min((W - padL - padR) / Math.max(x1 - x0, 0.4), (H - padT - padB) / Math.max(y1 * 1.06, 0.4));
       // a path of over a kilometre means the scale could not be read (the grid below would never end)
@@ -2621,12 +2652,12 @@ window.KinemaApp = {
       g.font = '10.5px "Zen Kaku Gothic New", sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'bottom';
-      const across = !aligned ? (T.view === 'front' ? '左右（cm）' : '前後（cm）') : r.move === 'broad' ? '踏み切り線からの距離（cm）' : '足の真ん中からの距離（cm）';
+      const across = !aligned ? (T.view === 'front' ? '左右（cm）' : '前後（cm）') : moveNow === 'broad' ? '踏み切り線からの距離（cm）' : '足の真ん中からの距離（cm）';
       const acrossNow = narrow ? '距離（cm）' : across;
       g.fillText(T.view === 'front' ? `← ${narrow ? '左' : '画面の左'}　　${acrossNow}　　${narrow ? '右' : '画面の右'} →` : `← 後ろ　　${acrossNow}　　前 →`, midX, H - 2);
       if (narrow) {
         // the legend sits under the chart: over it, the words would lie on top of the path
-        trajLegendEl.innerHTML = `<i style="color:${tokens['--warn']}">━</i> 床を押す力　<i style="color:${tokens['--ink']}">━</i> 動く方向　<i style="color:${tokens['--ok']}">┅</i> ${r.move === 'broad' ? '目安の角度（25〜45°）' : '理想の線'}　縦は高さ（cm）・1マス ${Math.round(step * 100)}cm`;
+        trajLegendEl.innerHTML = `<i style="color:${tokens['--warn']}">━</i> 床を押す力　<i style="color:${tokens['--ink']}">━</i> 動く方向${moveNow === 'general' ? '' : `　<i style="color:${tokens['--ok']}">┅</i> ${moveNow === 'broad' ? '目安の角度（25〜45°）' : '理想の線'}`}　縦は高さ（cm）・1マス ${Math.round(step * 100)}cm`;
       } else {
         g.save();
         g.translate(12, padT + (H - padT - padB) / 2);
@@ -2639,7 +2670,7 @@ window.KinemaApp = {
         g.fillText(`1マス＝${Math.round(step * 100)}cm`, W - padR - 4, padT + 4);
         g.textAlign = 'left';
         let lx = padL + 6;
-        for (const [text, color] of [['━ 床を押す力', '--warn'], ['━ 動く方向', '--ink'], ...(r.move === 'broad' ? [] : [['┅ 理想の線', '--ok']])]) {
+        for (const [text, color] of [['━ 床を押す力', '--warn'], ['━ 動く方向', '--ink'], ...(moveNow === 'broad' || moveNow === 'general' ? [] : [['┅ 理想の線', '--ok']])]) {
           g.fillStyle = tokens[color];
           g.fillText(text, lx, padT + 4);
           lx += g.measureText(text).width + 12;
@@ -2668,7 +2699,7 @@ window.KinemaApp = {
       g.lineWidth = 1.5;
       g.setLineDash([6, 4]);
       g.beginPath();
-      if (r.move === 'broad') {
+      if (moveNow === 'broad') {
         const ev = r.trajView.events.find(e => e.ja === '踏み切り' && e.i >= a0 && e.i <= b0), fi = ev ? ev.i - 1 : -1;
         const x0 = fi >= 0 ? com.x[fi] - ox : NaN, y0 = fi >= 0 ? com.y[fi] - oy : NaN;
         if (Number.isFinite(x0) && Number.isFinite(y0)) {
@@ -2678,7 +2709,7 @@ window.KinemaApp = {
             g.lineTo(X(x0 + Math.cos(deg * Math.PI / 180)), Y(y0 + Math.sin(deg * Math.PI / 180)));
           }
         }
-      } else {
+      } else if (moveNow !== 'general') {
         g.moveTo(X(0), Y(0));
         g.lineTo(X(0), padT);
       }
@@ -2804,7 +2835,7 @@ window.KinemaApp = {
         }
       }
       if (inside && Number.isFinite(cx0) && Number.isFinite(cy0)) {
-        const from = r.move === 'broad' ? '踏み切り線' : aligned ? '足の真ん中' : 'スタート';
+        const from = moveNow === 'broad' ? '踏み切り線' : aligned ? '足の真ん中' : 'スタート';
         const way = T.view === 'front' ? (cx0 >= 0 ? '画面の右へ' : '画面の左へ') : cx0 >= 0 ? '前へ' : '後ろへ';
         const stand = aligned ? com.y[a0] - oy : plan ? plan.stand : NaN;
         const sink = Number.isFinite(stand) ? `（立った姿勢より ${signedCm(cy0 - stand)}）` : '';
@@ -2814,7 +2845,7 @@ window.KinemaApp = {
       }
       // how far this jump went, on the floor: from the toes at take-off (0 here) to the heels on landing
       const rep = r.reps && r.reps[cur];
-      if (aligned && r.move === 'broad' && rep && Number.isFinite(rep.meters)) {
+      if (aligned && moveNow === 'broad' && rep && Number.isFinite(rep.meters)) {
         const x0 = X(0), x1 = X(rep.meters), y = Y(0) - 6, label = `跳んだ距離 ${rep.meters.toFixed(2)} m`;
         g.strokeStyle = tokens['--accent'];
         g.lineWidth = 3;
@@ -2929,13 +2960,110 @@ window.KinemaApp = {
       $('#kinMini').innerHTML = `<div class="kshare">${joints.map(j => `<i style="flex: ${(s.share[j] * 100).toFixed(1)} 1 0; background: var(${JOINT_COLOR[j]})">${s.share[j] >= 0.12 ? `${part(j)}%` : ''}</i>`).join('')}</div>
         <div class="kkey">${joints.map(j => `<span><i style="background: var(${JOINT_COLOR[j]})"></i>${{ hip: '股関節', knee: '膝', ankle: '足首' }[j]} ${part(j)}%</span>`).join('')}<span>仕事の割合${s.count > 1 ? `（${s.count}回をならした値）` : ''}</span></div>`;
     }
+    const KIN_METHOD = $('#kinMethod').textContent;
+    const GEN_COLOR = { shoulder: '--tr-sh', elbow: '--tr-wr', hip: '--tr-hip', knee: '--tr-kn', ankle: '--tr-ft', trunk: '--muted' };
+    const GEN_VIEW = { arms: ['shoulder', 'elbow'], legs: ['hip', 'knee', 'ankle', 'trunk'] };
+    let genView = null;
+    const genBout = r => (r.output.bouts.length ? r.output.bouts[Math.max(0, segments() ? segNow() : 0)] : null);
+    const muscleNames = ids => ids.map(id => (MUSCLE[id] ? `<button type="button" class="mchip" data-id="${id}">${esc(MUSCLE[id].ja)}</button>` : `<span class="mchip plain">${esc(window.KINEMA_BODY.EXTRA_MUSCLES.find(m => m.id === id)?.ja || id)}</span>`)).join('');
+    function renderGeneralOutput(r) {
+      const b = genBout(r), kg = userWeight();
+      $('#kinMethod').textContent = '計算の方法：腕は、体重に対する部位の重さの比率（de Leva 1996）と動きの加速から肩と肘の力を計算しています。脚と体幹は、重心の加速から床を押す力を求め、関節との距離から計算しています。筋肉は、関節と力の向きから考えられるものを示しています。';
+      kinLegendEl.textContent = '線は関節にかかる力の大きさです。腕は振っている側だけ、脚は両脚の合計です。縦の線がいまの場面で、押すとその場面へ移動します。';
+      kinHintsEl.innerHTML = '';
+      if (!b) {
+        kinPhasesEl.innerHTML = '';
+        $('#kinChartTitle').textContent = '';
+        $('#kinMini').innerHTML = '';
+        kinJointsEl.innerHTML = '<p class="empty">動いている場面が見つからなかったため、出力は計算できません。</p>';
+        kinMusclesEl.innerHTML = '';
+        return;
+      }
+      const hasLegs = !!r.output.legs;
+      if (!genView) genView = 'arms';
+      if (!hasLegs) genView = 'arms';
+      $('#kinChartTitle').textContent = `${Math.max(0, segments() ? segNow() : 0) + 1}つ目・${b.hand === 'r' ? '右手' : '左手'}側`;
+      kinPhasesEl.innerHTML = `<button type="button" data-v="arms" aria-pressed="${genView === 'arms'}">腕</button>${hasLegs ? `<button type="button" data-v="legs" aria-pressed="${genView === 'legs'}">脚と体幹</button>` : ''}`;
+      kinPhasesEl.querySelectorAll('button').forEach(x => x.addEventListener('click', () => { genView = x.dataset.v; renderKin(); }));
+      const worked = b.joints.filter(j => j.joint !== 'trunk' && j.share > 0).sort((x, y) => y.share - x.share);
+      const part = j => Math.round(j.share * 100);
+      const shareHtml = worked.length ? `<div class="kshare">${worked.map(j => `<i style="flex: ${(j.share * 100).toFixed(1)} 1 0; background: var(${GEN_COLOR[j.joint]})">${j.share >= 0.12 ? `${part(j)}%` : ''}</i>`).join('')}</div>
+        <div class="kkey">${worked.map(j => `<span><i style="background: var(${GEN_COLOR[j.joint]})"></i>${esc(j.ja)} ${part(j)}%</span>`).join('')}<span>仕事の割合</span></div>` : '';
+      $('#kinMini').innerHTML = shareHtml;
+      const size = j => (kg ? `${(j.peak * kg).toFixed(j.peak * kg < 10 ? 1 : 0)} N·m` : `${j.peak.toFixed(2)} N·m/kg`);
+      kinJointsEl.innerHTML = `${shareHtml}<table class="gen-table"><thead><tr><th>関節</th><th>力の向き</th><th>最大の力</th></tr></thead><tbody>${b.joints.map(j => `<tr><th scope="row">${esc(j.ja)}</th><td>${esc(j.moveJa)}${j.brake ? '（ブレーキ）' : ''}</td><td>${j.unsure ? '読み取りが不安定' : size(j)}</td></tr>`).join('')}</tbody></table>
+        <p class="note tight">${kg ? '' : '体重を入れるとN·mで表示します。'}ラケットや重りの重さ、腕のひねりの力は入っていません。速い動きの最大値は、動画の速さの都合で少なめに出ます。</p>`;
+      const stab = window.KINEMA_BODY.TRUNK.stabilitySystem.local.muscles;
+      kinMusclesEl.innerHTML = `<p class="note tight">関節と力の向きから考えられる筋肉です。筋肉ごとの力の割合は、動画からは分かりません。</p>
+        ${b.joints.map(j => `<div class="mrole"><h4>${esc(j.ja)} <span>${esc(j.moveJa)}の力</span></h4><div class="mchips">${muscleNames(j.prime)}</div>${j.assist.length ? `<div class="mchips assist"><small>補助</small>${muscleNames(j.assist)}</div>` : ''}</div>`).join('')}
+        <div class="mrole"><h4>体幹を安定させる筋肉 <span>動いている間に働くと考えられます。腹圧は動画からは測れません</span></h4><div class="mchips">${muscleNames(stab)}</div></div>`;
+      kinMusclesEl.querySelectorAll('button[data-id]').forEach(x => x.addEventListener('click', () => toggleSelect(x.dataset.id)));
+      markLists();
+    }
+    function drawGeneralOutput(g, W, H, r) {
+      const b = genBout(r);
+      if (!b) { g.fillStyle = tokens['--muted']; g.font = '12px "Zen Kaku Gothic New", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('動いている場面がありません', W / 2, H / 2); return; }
+      const S = r.output.series(b.hand), joints = GEN_VIEW[genView || 'arms'].filter(j => S[j]);
+      const pad = Math.round(0.25 * state.fps), i0 = Math.max(0, b.a - pad), i1 = Math.min(state.analyzed - 1, b.b + pad);
+      let top = 0.05;
+      for (const j of joints) for (let i = i0; i <= i1; i++) if (Number.isFinite(S[j][i])) top = Math.max(top, Math.abs(S[j][i]));
+      top *= 1.12;
+      const padL = 38, padR = 10, padT = 14, padB = 18;
+      const X = i => padL + ((i - i0) / Math.max(1, i1 - i0)) * (W - padL - padR), Y = v => padT + (1 - (v + top) / (2 * top)) * (H - padT - padB);
+      const step = [0.05, 0.1, 0.2, 0.5, 1, 2, 5].find(v => top / v <= 3) || 10;
+      g.font = '10px "Zen Kaku Gothic New", sans-serif';
+      g.lineWidth = 1;
+      g.textAlign = 'right';
+      g.textBaseline = 'middle';
+      for (let v = -Math.floor(top / step) * step; v <= top + 1e-9; v += step) {
+        g.strokeStyle = Math.abs(v) < 1e-9 ? tokens['--ink'] : tokens['--line'];
+        g.beginPath(); g.moveTo(padL, Y(v)); g.lineTo(W - padR, Y(v)); g.stroke();
+        g.fillStyle = tokens['--muted'];
+        g.fillText(String(Number(v.toFixed(2))), padL - 5, Y(v));
+      }
+      g.textAlign = 'left';
+      g.textBaseline = 'top';
+      g.fillText('N·m/kg', 4, 0);
+      g.textAlign = 'center';
+      for (const i of [i0, i1]) g.fillText(`${state.frames[i].t.toFixed(1)}秒`, clamp(X(i), padL + 12, W - padR - 14), H - 13);
+      const placed = [];
+      g.textBaseline = 'alphabetic';
+      for (const j of joints) {
+        g.strokeStyle = tokens[GEN_COLOR[j]] || tokens['--muted'];
+        g.lineWidth = 2.2;
+        g.setLineDash(j === 'trunk' ? [4, 3] : []);
+        g.beginPath();
+        let pen = false, best = -1, most = 0;
+        for (let i = i0; i <= i1; i++) {
+          const v = S[j][i];
+          if (!Number.isFinite(v)) { pen = false; continue; }
+          if (Math.abs(v) > most) { most = Math.abs(v); best = i; }
+          if (pen) g.lineTo(X(i), Y(v)); else { g.moveTo(X(i), Y(v)); pen = true; }
+        }
+        g.stroke();
+        g.setLineDash([]);
+        if (best >= 0) {
+          g.font = '700 11px "Zen Kaku Gothic New", sans-serif';
+          g.textAlign = 'center';
+          nameLine(g, r.output.JA[j], tokens[GEN_COLOR[j]] || tokens['--muted'], clamp(X(best), padL + 20, W - padR - 20), Y(Math.abs(S[j][best])) - 3, placed, padT + 12);
+        }
+      }
+      if (state.idx >= i0 && state.idx <= i1) {
+        g.strokeStyle = tokens['--ink'];
+        g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(X(state.idx), padT); g.lineTo(X(state.idx), H - padB); g.stroke();
+      }
+      kinGeom = { i0, i1, padL, padR, W };
+    }
     function renderKin() {
       const r = state.result, K = r && r.kin;
       kinChartDirty = true;
       kinLegendEl.textContent = '山が高いほど強い力です。0より上は関節を伸ばす向き、下は曲げる向きです。空中は床を押せないので0になります。縦の線がいまの場面で、クリックするとその場面へ移動します。';
+      if (r && r.general && r.output) { renderGeneralOutput(r); return; }
+      $('#kinMethod').textContent = KIN_METHOD;
       if (!K || !Object.keys(K.summary).length) {
         kinPhasesEl.innerHTML = '';
-        kinJointsEl.innerHTML = `<p class="empty">${r && r.general ? '全般の分析では、筋肉の出力は計算しません。今の計算は、跳ぶ動作としゃがむ動作を前提にしているためです。' : r && r.error ? '動きを見つけられなかったため、出力は計算できません。' : '解析が終わると、ここに表示されます。'}</p>`;
+        kinJointsEl.innerHTML = `<p class="empty">${r && r.general ? '動いている場面が見つからなかったため、出力は計算できません。' : r && r.error ? '動きを見つけられなかったため、出力は計算できません。' : '解析が終わると、ここに表示されます。'}</p>`;
         $('#kinMini').innerHTML = '';
         kinMusclesEl.innerHTML = '';
         kinHintsEl.innerHTML = '';
@@ -2992,12 +3120,13 @@ window.KinemaApp = {
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.clearRect(0, 0, W, H);
       const r = state.result, K = r && r.kin;
+      if (r && r.general && r.output) { drawGeneralOutput(g, W, H, r); return; }
       if (!K || K.n !== state.analyzed) {
         g.fillStyle = tokens['--muted'];
         g.font = '12px "Zen Kaku Gothic New", sans-serif';
         g.textAlign = 'center';
         g.textBaseline = 'middle';
-        g.fillText(state.analyzing ? '解析が終わると表示されます' : state.general ? '全般の分析では計算しません' : '出力のデータはまだありません', W / 2, H / 2);
+        g.fillText(state.analyzing ? '解析が終わると表示されます' : '出力のデータはまだありません', W / 2, H / 2);
         return;
       }
       // the repetition in view may have changed: the figures above follow it
@@ -3792,7 +3921,7 @@ window.KinemaApp = {
         const copy = { frames: frames.map(f => ({ ...f })), fps: rec.fps, vw: rec.vw, vh: rec.vh };
         hydrate(copy);
         let r = window.KinemaAnalysis.analyze(rec.move, copy.frames, rec.vw, rec.vh, { heightCm: rec.heightCm, weightKg: rec.weightKg });
-        if (rec.general) r = asGeneral(r, window.KinemaQuality.analyze(copy.frames, rec.vw, rec.vh, rec.fps), copy.frames.length);
+        if (rec.general) r = asGeneral(r, window.KinemaQuality.analyze(copy.frames, rec.vw, rec.vh, rec.fps), copy.frames, rec.fps);
         await Store.save(metaOf(id, rec.name, rec.move, r, false, 0), { ...rec, id, video: null });
         await refreshSaved();
         renderLibrary();
@@ -3836,6 +3965,7 @@ window.KinemaApp = {
       data.frames.forEach((f, i) => { state.frames.push(f); f.m = computeMetrics(i); });
       state.analyzed = data.analyzed;
       trajUi.points = new Set(TRAJ_DEFAULT[rec.move]);
+      if (data.general) showGeneralViews();
       syncMoveButtons();
       metaSource.textContent = rec.name;
       pipTag.textContent = url ? '元の動画' : '保存データ';
@@ -3870,8 +4000,9 @@ window.KinemaApp = {
         const data = await Store.get(id), rec = savedList.find(x => x.id === id);
         if (!data || !rec) throw new Error('saved video missing');
         hydrate(data);
-        let result = window.KinemaAnalysis.analyze(rec.move, data.frames, data.vw, data.vh, { heightCm: data.heightCm || 0, weightKg: data.weightKg || 0 });
-        if (data.general) result = asGeneral(result, window.KinemaQuality.analyze(data.frames, data.vw, data.vh, data.fps), data.frames.length);
+        const Q = data.general ? window.KinemaQuality.analyze(data.frames, data.vw, data.vh, data.fps) : null;
+        let result = window.KinemaAnalysis.analyze(rec.move, data.frames, data.vw, data.vh, { heightCm: data.heightCm || 0, weightKg: data.weightKg || 0, ...(Q ? { generalPhases: generalPhases(Q) } : {}) });
+        if (Q) result = asGeneral(result, Q, data.frames, data.fps);
         return { label: rec.name, move: rec.move, fps: data.fps, vw: data.vw, vh: data.vh, frames: data.frames, result, url: data.video ? URL.createObjectURL(data.video) : null, ownUrl: !!data.video };
       },
     });

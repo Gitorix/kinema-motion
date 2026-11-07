@@ -184,7 +184,8 @@ window.KinemaQuality = (() => {
     }
     const chain = typical.filter(s => s.part >= 0.5).map(s => s.ja).join('→');
     const good = judged.filter(e => e.ok).length, rate = good / judged.length;
-    return { ja: '動く順番', status: rate >= 0.7 ? 'good' : rate >= 0.4 ? 'mid' : 'warn', value: `${judged.length}回のうち ${good}回、${chain}の順に速さが伝わっています`, detail, rows };
+    const right = swings.filter(b => b.hand === 'r').length, handJa = right * 2 >= swings.length ? '右手' : '左手';
+    return { ja: '動く順番', status: rate >= 0.7 ? 'good' : rate >= 0.4 ? 'mid' : 'warn', value: `${handJa}で${judged.length}回のうち ${good}回、${chain}の順に速さが伝わっています`, detail, rows };
   }
 
   function stabilityItem(M, bouts) {
